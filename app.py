@@ -126,20 +126,19 @@ with st.sidebar:
 
 st.subheader("Itens da simulação")
 
+# Começamos com uma tabela vazia, para o usuário adicionar as linhas necessárias
 default_items = pd.DataFrame(
-    [
-        {
-            "NCM": "4202.22.10",
-            "Description": "Bolsa sintética exemplo",
-            "Quantity": 1000,
-            "FOB_Unit_USD": 2.50,
-            "Gross_Weight_kg": 0.5,
-            "II_rate": 0.35,
-            "IPI_rate": 0.065,
-            "PIS_rate": 0.021,
-            "COFINS_rate": 0.0965,
-            "ICMS_rate": 0.0,  # 0 = usa a alíquota ICMS da barra lateral
-        }
+    columns=[
+        "NCM",
+        "Description",
+        "Quantity",
+        "FOB_Unit_USD",
+        "Gross_Weight_kg",
+        "II_rate",
+        "IPI_rate",
+        "PIS_rate",
+        "COFINS_rate",
+        "ICMS_rate",
     ]
 )
 
@@ -148,12 +147,87 @@ items_df = st.data_editor(
     num_rows="dynamic",
     use_container_width=True,
     key="items_editor",
+    column_config={
+        "NCM": st.column_config.TextColumn(
+            "NCM",
+            help="Código NCM da mercadoria (8 dígitos).",
+        ),
+        "Description": st.column_config.TextColumn(
+            "Descrição do produto",
+            help="Descrição para identificação interna na simulação.",
+        ),
+        "Quantity": st.column_config.NumberColumn(
+            "Quantidade",
+            help="Quantidade total desse item no embarque.",
+            min_value=0,
+            step=1,
+            format="%.0f",
+        ),
+        "FOB_Unit_USD": st.column_config.NumberColumn(
+            "FOB unitário (USD)",
+            help="Preço FOB unitário em dólares.",
+            min_value=0.0,
+            step=0.01,
+            format="%.4f",
+        ),
+        "Gross_Weight_kg": st.column_config.NumberColumn(
+            "Peso bruto por unidade (kg)",
+            help="Opcional, usado se futuramente a alocação for por peso.",
+            min_value=0.0,
+            step=0.01,
+            format="%.3f",
+        ),
+        "II_rate": st.column_config.NumberColumn(
+            "Alíquota II",
+            help="Alíquota de Imposto de Importação (ex: 0,35 = 35%).",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            format="%.4f",
+        ),
+        "IPI_rate": st.column_config.NumberColumn(
+            "Alíquota IPI",
+            help="Alíquota de IPI (ex: 0,065 = 6,5%).",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            format="%.4f",
+        ),
+        "PIS_rate": st.column_config.NumberColumn(
+            "Alíquota PIS-Importação",
+            help="Alíquota de PIS-Importação (ex: 0,021 = 2,1%).",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.001,
+            format="%.4f",
+        ),
+        "COFINS_rate": st.column_config.NumberColumn(
+            "Alíquota COFINS-Importação",
+            help="Alíquota de COFINS-Importação (ex: 0,0965 = 9,65%).",
+            min_value=0.0,
+            max_value=1.0,
+            step=0.001,
+            format="%.4f",
+        ),
+        "ICMS_rate": st.column_config.NumberColumn(
+            "Alíquota ICMS específica",
+            help=(
+                "Opcional. Se deixar em branco ou 0, será usada a alíquota de ICMS "
+                "informada na barra lateral."
+            ),
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            format="%.4f",
+        ),
+    },
 )
 
 st.caption(
-    "Preencha **NCM**, **Quantidade**, **FOB unitário (USD)** e as alíquotas de "
-    "**II / IPI / PIS / COFINS**. "
-    "Se deixar **ICMS_rate = 0**, será usada a alíquota de ICMS informada na barra lateral."
+    "Clique em **+** para adicionar novas linhas. "
+    "Preencha **NCM**, **Descrição**, **Quantidade**, **FOB unitário (USD)** e as alíquotas de "
+    "**II / IPI / PIS / COFINS** conforme o enquadramento fiscal do produto. "
+    "Se deixar **Alíquota ICMS específica = 0**, será usada a alíquota de ICMS informada na barra lateral."
 )
 
 # =========================
@@ -161,7 +235,13 @@ st.caption(
 # =========================
 
 if st.button("Calcular custo de importação"):
-    if items_df.empty:
+    # Remove linhas completamente vazias (sem NCM e sem quantidade)
+    clean_df = items_df.copy()
+    clean_df = clean_df[
+        ~(clean_df["NCM"].isna() & clean_df["Quantity"].isna())
+    ]
+
+    if clean_df.empty:
         st.warning("Adicione pelo menos um item à simulação.")
     else:
         # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
@@ -207,7 +287,7 @@ if st.button("Calcular custo de importação"):
             allocation_method=allocation_method,
         )
 
-        per_item, summary = compute_landed_cost(items_df, cfg)
+        per_item, summary = compute_landed_cost(clean_df, cfg)
 
         # =========================
         # RESULTADOS
