@@ -4,6 +4,12 @@ import pandas as pd
 from calculations import ShipmentConfig, compute_landed_cost
 from ncm_loader import load_ncm_tec_table
 
+# Carrega tabela NCM + TEC + TIPI uma única vez
+try:
+    NCM_TEC_TABLE = load_ncm_tec_table()
+except Exception:
+    NCM_TEC_TABLE = None
+
 st.set_page_config(
     page_title="Simulador de Custo de Importação",
     page_icon="📦",
@@ -16,14 +22,6 @@ st.markdown(
     "Simule o **custo Brasil** de uma importação com vários produtos no mesmo embarque, "
     "incluindo impostos, frete internacional e transporte rodoviário."
 )
-
-# Carrega tabela NCM + TEC (II) uma única vez
-try:
-    NCM_TEC_TABLE = load_ncm_tec_table()
-except Exception as e:
-    NCM_TEC_TABLE = None
-    # Em produção você pode querer logar isso:
-    # st.sidebar.error(f"Erro ao carregar tabela de NCM/TEC: {e}")
 
 # =========================
 # SIDEBAR – CONFIGURAÇÕES
@@ -38,7 +36,7 @@ with st.sidebar:
         index=0,
     )
 
-    # ICMS interno – por enquanto fixo 17% (padrão RS / vários estados)
+    # ICMS interno – por enquanto fixo 17% padrão (ajustável)
     icms_aliq_padrao = 0.17
     icms_aliq = st.number_input(
         "Alíquota interna de ICMS",
@@ -135,7 +133,7 @@ with st.sidebar:
 
 st.subheader("Itens da simulação")
 
-# Começamos com uma tabela vazia, para o usuário adicionar as linhas necessárias
+# Tabela inicial vazia; usuário adiciona as linhas
 default_items = pd.DataFrame(
     columns=[
         "NCM",
@@ -188,7 +186,7 @@ items_df = st.data_editor(
         ),
         "II_rate": st.column_config.NumberColumn(
             "Alíquota II",
-            help="Alíquota de Imposto de Importação (ex: 0,35 = 35%).",
+            help="Alíquota de Imposto de Importação (ex: 0,35 = 35%). Deixe 0 para usar valor oficial TEC.",
             min_value=0.0,
             max_value=1.0,
             step=0.01,
@@ -196,7 +194,7 @@ items_df = st.data_editor(
         ),
         "IPI_rate": st.column_config.NumberColumn(
             "Alíquota IPI",
-            help="Alíquota de IPI (ex: 0,065 = 6,5%).",
+            help="Alíquota de IPI (ex: 0,065 = 6,5%). Deixe 0 para usar valor da TIPI.",
             min_value=0.0,
             max_value=1.0,
             step=0.01,
@@ -235,8 +233,10 @@ items_df = st.data_editor(
 st.caption(
     "Clique em **+** para adicionar novas linhas. "
     "Preencha **NCM**, **Descrição**, **Quantidade**, **FOB unitário (USD)** e as alíquotas de "
-    "**II / IPI / PIS / COFINS** conforme o enquadramento fiscal do produto. "
-    "Se deixar **Alíquota ICMS específica = 0**, será usada a alíquota de ICMS informada na barra lateral."
+    "**PIS / COFINS**. "
+    "Se deixar **II_rate = 0**, será usada a alíquota oficial da TEC. "
+    "Se deixar **IPI_rate = 0**, será usada a alíquota oficial da TIPI (quando disponível). "
+    "Se deixar **ICMS_rate = 0**, será usada a alíquota de ICMS informada na barra lateral."
 )
 
 # =========================
@@ -253,6 +253,51 @@ if st.button("Calcular custo de importação"):
     if clean_df.empty:
         st.warning("Adicione pelo menos um item à simulação.")
     else:
+        # -----------------------------
+        # Auto-preencher II/IPI por NCM
+        # -----------------------------
+        if NCM_TEC_TABLE is not None:
+            # Normaliza NCM → NCM8
+            clean_df["NCM8"] = (
+                clean_df["NCM"]
+                .astype(str)
+                .str.replace(".", "", regex=False)
+                .str.zfill(8)
+            )
+
+            # Garante colunas numéricas básicas (caso venham vazias)
+            for col in ["II_rate", "IPI_rate"]:
+                if col not in clean_df.columns:
+                    clean_df[col] = 0.0
+                clean_df[col] = clean_df[col].fillna(0.0)
+
+            # Junta com tabela de NCM (II/IPI oficiais)
+            clean_df = clean_df.merge(
+                NCM_TEC_TABLE[["NCM8", "II_rate", "IPI_rate"]],
+                on="NCM8",
+                how="left",
+                suffixes=("", "_from_table"),
+            )
+
+            # Usa II da tabela se usuário deixou 0
+            clean_df["II_rate"] = clean_df["II_rate"].fillna(0.0)
+            clean_df["II_rate_from_table"] = clean_df["II_rate_from_table"].fillna(0.0)
+            mask_use_ii = clean_df["II_rate"] == 0.0
+            clean_df.loc[mask_use_ii, "II_rate"] = clean_df.loc[mask_use_ii, "II_rate_from_table"]
+
+            # Usa IPI da tabela se usuário deixou 0
+            clean_df["IPI_rate"] = clean_df["IPI_rate"].fillna(0.0)
+            clean_df["IPI_rate_from_table"] = clean_df["IPI_rate_from_table"].fillna(0.0)
+            mask_use_ipi = clean_df["IPI_rate"] == 0.0
+            clean_df.loc[mask_use_ipi, "IPI_rate"] = clean_df.loc[mask_use_ipi, "IPI_rate_from_table"]
+
+            # Limpa colunas auxiliares
+            clean_df.drop(
+                columns=["NCM8", "II_rate_from_table", "IPI_rate_from_table"],
+                inplace=True,
+                errors="ignore",
+            )
+
         # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
         if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
             afrmm_pct = 0.08
@@ -320,30 +365,6 @@ if st.button("Calcular custo de importação"):
             "Landed_Cost_BRL",
             "Unit_Cost_BRL",
         ]
-
-                # --- Auto-preenchimento da alíquota de II a partir da tabela NCM/TEC ---
-        if NCM_TEC_TABLE is not None and not clean_df.empty:
-            # Garante que NCM está em formato string de 8 dígitos
-            clean_df["NCM8"] = clean_df["NCM"].astype(str).str.replace(".", "", regex=False).str.zfill(8)
-
-            # Junta com tabela de II por NCM
-            clean_df = clean_df.merge(
-                NCM_TEC_TABLE[["NCM8", "II_rate"]],
-                on="NCM8",
-                how="left",
-                suffixes=("", "_from_tec"),
-            )
-
-            # Se II_rate estiver vazio/0, usa o valor da TEC
-            clean_df["II_rate"] = clean_df["II_rate"].fillna(0.0)
-            clean_df["II_rate_from_tec"] = clean_df["II_rate_from_tec"].fillna(0.0)
-
-            mask_use_tec = clean_df["II_rate"] == 0.0
-            clean_df.loc[mask_use_tec, "II_rate"] = clean_df.loc[mask_use_tec, "II_rate_from_tec"]
-
-            # Remove coluna auxiliar
-            clean_df.drop(columns=["NCM8", "II_rate_from_tec"], inplace=True)
-
 
         display_df = per_item[cols_to_show].rename(
             columns={
