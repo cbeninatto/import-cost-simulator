@@ -1,18 +1,20 @@
-import pandas as pd
 import re
 from functools import lru_cache
+from typing import Optional
+
+import pandas as pd
 
 
-def _extract_ncm8_from_dotted(code: str) -> str | None:
+def _extract_ncm8_from_dotted(code: str) -> Optional[str]:
     """
-    Convert '0101.21.00' -> '01012100'.
-    Returns None if pattern does not match.
+    Converte '0101.21.00' -> '01012100'.
+    Retorna None se não bater com o padrão.
     """
     if not isinstance(code, str):
         return None
     code = code.strip()
-    if re.match(r'^\d{4}\.\d{2}\.\d{2}$', code):
-        return code.replace('.', '')
+    if re.match(r"^\d{4}\.\d{2}\.\d{2}$", code):
+        return code.replace(".", "")
     return None
 
 
@@ -20,24 +22,27 @@ def _extract_ncm8_from_dotted(code: str) -> str | None:
 def load_ncm_tec_table(
     tec_path: str = "data/tec.xlsx",
     ncm_path: str = "data/Tabela NCM 2022 com Utrib_Comércio Exterior_vigência 01.10.25.xlsx",
+    tipi_csv_path: str = "data/tipi_ipi_rates.csv",
 ) -> pd.DataFrame:
     """
-    Load and merge:
-      - TEC.xlsx  (sheet 'TEC') -> II (TEC %) por NCM
-      - Tabela NCM + uTrib      -> NCM, uTrib, etc.
+    Carrega e integra:
+      - TEC.xlsx (sheet 'TEC')        -> alíquota II (TEC %) por NCM
+      - Tabela NCM + uTrib (Siscomex) -> NCM + unidades de tributação
+      - TIPI IPI CSV                  -> alíquota IPI por NCM (tipi_ipi_rates.csv)
 
-    Returns a DataFrame with:
-      - NCM8           (8-digit string)
-      - II_rate        (0.xx)
-      - uTrib_abrev    (abreviatura da unidade)
-      - uTrib_desc     (descrição da unidade)
-      + anything else from NCM file if needed
+    Retorna DataFrame com colunas principais:
+      - NCM8
+      - uTrib_abrev
+      - uTrib_desc
+      - II_rate  (0.xx)
+      - IPI_rate (0.xx ou NaN se não encontrado)
     """
 
-    # --- Load TEC (II rates) ---
+    # -------------------------
+    # TEC: II (TEC %) por NCM
+    # -------------------------
     tec_raw = pd.read_excel(tec_path, sheet_name="TEC", header=None)
 
-    # Find header row containing 'NCM' and 'DESCRIÇÃO'
     header_row = None
     for i in range(len(tec_raw)):
         row = list(tec_raw.iloc[i].astype(str))
@@ -49,13 +54,13 @@ def load_ncm_tec_table(
         raise RuntimeError("Não foi possível encontrar o cabeçalho (NCM / DESCRIÇÃO) na planilha TEC.")
 
     tec = tec_raw.iloc[header_row:].copy()
-    tec.columns = tec.iloc[0]
-    tec = tec[1:]
+    tec.columns = tec.iloc[0]  # primeira linha após header_row é o cabeçalho real
+    tec = tec[1:]              # remove a linha de cabeçalho duplicada
 
     tec["NCM8"] = tec["NCM"].apply(_extract_ncm8_from_dotted)
     tec = tec[tec["NCM8"].notna()].copy()
 
-    # Converte TEC (%) para II_rate 0.xx
+    # Converte TEC (%) para alíquota II (0.xx)
     tec["II_rate"] = (
         tec["TEC (%)"]
         .astype(str)
@@ -66,11 +71,12 @@ def load_ncm_tec_table(
 
     tec_small = tec[["NCM8", "II_rate"]].drop_duplicates()
 
-    # --- Load NCM + uTrib ---
+    # -------------------------
+    # NCM + uTrib (Siscomex)
+    # -------------------------
     ncm = pd.read_excel(ncm_path, sheet_name="NCM X uTrib_Vig 1-10-2025")
     ncm["NCM8"] = ncm["NCM"].astype(str).str.zfill(8)
 
-    # Column names may vary slightly; adjust if needed
     utrib_abrev_col = "uTrib para uso em operações de Exportação (Abreviatura)"
     utrib_desc_col = "Descrição da uTrib utilizada em operações de Exportação"
 
@@ -81,12 +87,27 @@ def load_ncm_tec_table(
         }
     )
 
-    # --- Merge ---
     merged = pd.merge(
         ncm_small,
         tec_small,
         on="NCM8",
         how="left",
     )
+
+    # -------------------------
+    # TIPI: IPI por NCM (CSV)
+    # -------------------------
+    try:
+        tipi = pd.read_csv(tipi_csv_path, dtype={"NCM8": str})
+        tipi["NCM8"] = tipi["NCM8"].astype(str).str.zfill(8)
+
+        merged = merged.merge(
+            tipi[["NCM8", "IPI_rate"]],
+            on="NCM8",
+            how="left",
+        )
+    except FileNotFoundError:
+        # Se ainda não existir o CSV, apenas segue sem IPI_rate
+        merged["IPI_rate"] = pd.NA
 
     return merged
