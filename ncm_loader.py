@@ -21,25 +21,23 @@ def _extract_ncm8_from_dotted(code: str) -> Optional[str]:
 @lru_cache(maxsize=1)
 def load_ncm_tec_table(
     tec_path: str = "data/tec.xlsx",
-    ncm_path: str = "data/Tabela NCM 2022 com Utrib_Comércio Exterior_vigência 01.10.25.xlsx",
     tipi_csv_path: str = "data/tipi_ipi_rates.csv",
 ) -> pd.DataFrame:
     """
     Carrega e integra:
-      - TEC.xlsx (sheet 'TEC')        -> alíquota II (TEC %) por NCM
-      - Tabela NCM + uTrib (Siscomex) -> NCM + unidades de tributação
+      - TEC.xlsx (sheet 'TEC')        -> alíquota II (TEC %) + descrição por NCM
       - TIPI IPI CSV                  -> alíquota IPI por NCM (tipi_ipi_rates.csv)
 
     Retorna DataFrame com colunas principais:
-      - NCM8
-      - uTrib_abrev
-      - uTrib_desc
-      - II_rate  (0.xx)
-      - IPI_rate (0.xx ou NaN se não encontrado)
+      - NCM8          (string, 8 dígitos, sem pontos)
+      - NCM_dotted    (string, formato 0000.00.00 conforme TEC)
+      - Descricao     (descrição do produto conforme TEC)
+      - II_rate       (0.xx)
+      - IPI_rate      (0.xx ou NaN se não encontrado na TIPI)
     """
 
     # -------------------------
-    # TEC: II (TEC %) por NCM
+    # TEC: II (TEC %) + descrição por NCM
     # -------------------------
     tec_raw = pd.read_excel(tec_path, sheet_name="TEC", header=None)
 
@@ -69,30 +67,13 @@ def load_ncm_tec_table(
         / 100.0
     )
 
-    tec_small = tec[["NCM8", "II_rate"]].drop_duplicates()
+    # NCM_dotted = coluna original "NCM"
+    tec["NCM_dotted"] = tec["NCM"].astype(str).str.strip()
 
-    # -------------------------
-    # NCM + uTrib (Siscomex)
-    # -------------------------
-    ncm = pd.read_excel(ncm_path, sheet_name="NCM X uTrib_Vig 1-10-2025")
-    ncm["NCM8"] = ncm["NCM"].astype(str).str.zfill(8)
+    # Descrição
+    tec["Descricao"] = tec["DESCRIÇÃO"].astype(str).str.strip()
 
-    utrib_abrev_col = "uTrib para uso em operações de Exportação (Abreviatura)"
-    utrib_desc_col = "Descrição da uTrib utilizada em operações de Exportação"
-
-    ncm_small = ncm[["NCM8", utrib_abrev_col, utrib_desc_col]].rename(
-        columns={
-            utrib_abrev_col: "uTrib_abrev",
-            utrib_desc_col: "uTrib_desc",
-        }
-    )
-
-    merged = pd.merge(
-        ncm_small,
-        tec_small,
-        on="NCM8",
-        how="left",
-    )
+    tec_small = tec[["NCM8", "NCM_dotted", "Descricao", "II_rate"]].drop_duplicates()
 
     # -------------------------
     # TIPI: IPI por NCM (CSV)
@@ -101,13 +82,22 @@ def load_ncm_tec_table(
         tipi = pd.read_csv(tipi_csv_path, dtype={"NCM8": str})
         tipi["NCM8"] = tipi["NCM8"].astype(str).str.zfill(8)
 
-        merged = merged.merge(
-            tipi[["NCM8", "IPI_rate"]],
+        tipi_small = tipi[["NCM8", "IPI_rate"]]
+    except FileNotFoundError:
+        # Se ainda não existir o CSV, apenas segue sem IPI_rate
+        tipi_small = pd.DataFrame(columns=["NCM8", "IPI_rate"])
+
+    # -------------------------
+    # Merge TEC + TIPI
+    # -------------------------
+    if not tipi_small.empty:
+        merged = tec_small.merge(
+            tipi_small,
             on="NCM8",
             how="left",
         )
-    except FileNotFoundError:
-        # Se ainda não existir o CSV, apenas segue sem IPI_rate
+    else:
+        merged = tec_small.copy()
         merged["IPI_rate"] = pd.NA
 
     return merged
