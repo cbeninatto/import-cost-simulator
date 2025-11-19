@@ -16,41 +16,30 @@ Upload the official **TIPI PDF** and this app will generate a **tipi.csv** file 
 - `Descricao`
 - `Aliquota` (e.g. `0`, `10`, `NT`)
 
-> ⚠️ TIPI is a very large PDF.  
-> For performance reasons, we **limit how many pages are scanned**.  
-> You can adjust the limit below if needed.
+The parser is designed to handle **multi-line descriptions**, where the NCM appears on one line and the rate (`0`, `10`, `NT`, etc.) may appear at the end of the next line.
 """
 )
 
+
 uploaded_file = st.file_uploader("Select the TIPI PDF", type=["pdf"])
 
-max_pages = st.number_input(
-    "Max pages to scan (starting from page 1)",
-    min_value=1,
-    max_value=500,
-    value=60,
-    step=10,
-    help=(
-        "TIPI is huge. Parsing ALL pages can crash the app. "
-        "60 pages is a good balance between coverage and performance. "
-        "Increase carefully if you really need more."
-    ),
-)
 
-
-def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
+def extract_tipi_from_pdf(pdf_bytes: bytes) -> pd.DataFrame:
     """
     Extract rows from the TIPI PDF where NCM is in 0000.00.00 format,
     capturing DESCRIPTION (which may span multiple lines) and ALIQUOTA.
 
-    We also stop after `max_pages` pages to avoid timeouts on very large PDFs.
+    Strategy:
+    1) If a line matches: NCM + description + aliquota on the SAME line,
+       we capture it directly.
+    2) If a line only has NCM + partial description (no aliquota),
+       we start a 'pending block' and look at subsequent lines to find
+       the aliquota at the end of one of those lines.
     """
 
-    # 1) NCM + description + aliquota on the same line
-    #    e.g. "2204.30.00 Outros mostos de uvas 10"
+    # e.g. "2204.30.00 Outros mostos de uvas 10"
     ncm_full = re.compile(r"^(\d{4}\.\d{2}\.\d{2})\s+(.+?)\s+(NT|\d+)\s*$")
-
-    # 2) NCM at the start of the line, but maybe without aliquota yet
+    # e.g. "2204.30.00  ..." but *no* explicit aliquota at the end
     ncm_only = re.compile(r"^(\d{4}\.\d{2}\.\d{2})\b")
 
     rows = []
@@ -69,11 +58,7 @@ def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
         }
 
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-        total_pages = len(pdf.pages)
-        last_page_index = min(max_pages, total_pages)  # 1-based pages: 1..last_page_index
-
-        for page_index in range(last_page_index):
-            page = pdf.pages[page_index]
+        for page_index, page in enumerate(pdf.pages):
             text = page.extract_text()
             if not text:
                 continue
@@ -84,12 +69,13 @@ def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
                 if not stripped:
                     continue
 
-                # 1) Full match on a single line
+                # 1) Try the full pattern (NCM + description + aliquota all on one line)
                 m_full = ncm_full.match(stripped)
                 if m_full:
+                    # If there is a pending block that already has aliquota, push it
                     if current and current.get("aliquota"):
                         rows.append(finalize_current(current))
-                    current = None
+                    current = None  # reset block
 
                     ncm, desc, aliquota = m_full.groups()
                     rows.append(
@@ -101,14 +87,15 @@ def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
                     )
                     continue
 
-                # 2) Line starts with NCM but no aliquota (multi-line description case)
+                # 2) Try a line that starts with NCM but without aliquota at the end
                 m_ncm = ncm_only.match(stripped)
                 if m_ncm:
+                    # If there is a previous pending block that has aliquota, finalize it
                     if current and current.get("aliquota"):
                         rows.append(finalize_current(current))
 
                     ncm = m_ncm.group(1)
-                    rest = stripped[m_ncm.end():].strip()
+                    rest = stripped[m_ncm.end() :].strip()
                     current = {
                         "ncm": ncm,
                         "desc_parts": [rest] if rest else [],
@@ -116,7 +103,7 @@ def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
                     }
                     continue
 
-                # 3) Continuation of an existing NCM block
+                # 3) Non-NCM line: could be continuation of a pending block
                 if current:
                     tokens = stripped.split()
                     if not tokens:
@@ -124,7 +111,7 @@ def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
 
                     last = tokens[-1]
 
-                    # If the last token looks like an aliquota (e.g. 0, 10, NT)
+                    # If the last token looks like an aliquota, treat it as such
                     if re.fullmatch(r"(NT|\d+)", last):
                         aliquota = last
                         desc_extra = " ".join(tokens[:-1])
@@ -138,11 +125,11 @@ def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
                         # Just more description text
                         current["desc_parts"].append(stripped)
 
-    # End of PDF (or page limit): finalize block if it has an aliquota
+    # End of PDF: if there's a pending block with aliquota, finalize it
     if current and current.get("aliquota"):
         rows.append(finalize_current(current))
 
-    # Remove duplicates (same NCM, description, aliquota)
+    # Remove potential duplicates
     unique = {(r["NCM"], r["Descricao"], r["Aliquota"]): r for r in rows}
     rows = list(unique.values())
 
@@ -158,26 +145,20 @@ if uploaded_file is not None:
 
     with st.spinner("🔎 Extracting TIPI data..."):
         try:
-            df = extract_tipi_from_pdf(pdf_bytes, max_pages=int(max_pages))
+            df = extract_tipi_from_pdf(pdf_bytes)
         except Exception as e:
             st.error(f"Error while processing PDF: {e}")
         else:
             if df.empty:
                 st.warning(
                     "No rows found with NCM in the format 0000.00.00.\n"
-                    "Check if the PDF is the official TIPI and if the layout matches the expected structure.\n\n"
-                    "You can also try increasing the 'Max pages to scan' value."
+                    "Check if the PDF is the official TIPI and if the layout matches the expected structure."
                 )
             else:
                 st.success(
                     f"✅ Extraction finished — {len(df)} rows "
-                    f"({df['NCM'].nunique()} unique NCM codes) "
-                    f"from the first {int(max_pages)} page(s)."
+                    f"({df['NCM'].nunique()} unique NCM codes)."
                 )
-
-                # Show last few NCMs so you know where the scan stopped
-                st.caption("Last 10 NCMs found in this run:")
-                st.dataframe(df.tail(10))
 
                 st.subheader("Preview (first 100 rows)")
                 st.dataframe(df.head(100))
