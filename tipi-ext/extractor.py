@@ -1,196 +1,194 @@
-import os
-from io import StringIO
-
 import streamlit as st
 import pandas as pd
-from openai import OpenAI
+import pdfplumber
+import re
+from io import BytesIO
 
 
-# --- OpenAI client (reads key from Streamlit secrets or env) ---
-def get_client() -> OpenAI:
-    api_key = None
+st.set_page_config(page_title="TIPI → CSV Extractor", page_icon="📑")
 
-    # 1) Streamlit secrets (recommended on Streamlit Cloud)
-    if "OPENAI_API_KEY" in st.secrets:
-        api_key = st.secrets["OPENAI_API_KEY"]
-
-    # 2) Fallback to environment variable, if set
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        st.error(
-            "OPENAI_API_KEY not found. "
-            "Set it in Streamlit secrets or as an environment variable."
-        )
-        st.stop()
-
-    return OpenAI(api_key=api_key)
-
-
-st.set_page_config(page_title="TIPI → CSV Extractor (OpenAI)", page_icon="📑")
-
-st.title("📑 TIPI → CSV Extractor (using OpenAI)")
+st.title("📑 TIPI → CSV Extractor")
 st.markdown(
     """
-Upload the official **TIPI PDF** and this app will use **ChatGPT** to parse it and
-return a **CSV** with:
+Upload the official **TIPI PDF** and this app will generate a **tipi.csv** file with:
 
 - `NCM` (only codes in the format `0000.00.00`)
 - `Descricao`
-- `Aliquota` (numeric or `NT`, without `%`)
+- `Aliquota` (e.g. `0`, `10`, `NT`)
 
-> The parsing is done by OpenAI (PDF file input), not by `pdfplumber`.
+> ⚠️ TIPI is a very large PDF.  
+> For performance reasons, we **limit how many pages are scanned**.  
+> You can adjust the limit below if needed.
 """
 )
 
 uploaded_file = st.file_uploader("Select the TIPI PDF", type=["pdf"])
 
-model_name = st.selectbox(
-    "Model",
-    options=["gpt-4.1-mini", "gpt-4.1", "gpt-4o"],
-    index=0,
+max_pages = st.number_input(
+    "Max pages to scan (starting from page 1)",
+    min_value=1,
+    max_value=500,
+    value=60,
+    step=10,
     help=(
-        "gpt-4.1-mini: cheaper and usually enough for extraction.\n"
-        "gpt-4.1 / gpt-4o: more capable, more expensive."
+        "TIPI is huge. Parsing ALL pages can crash the app. "
+        "60 pages is a good balance between coverage and performance. "
+        "Increase carefully if you really need more."
     ),
 )
 
 
-def build_extraction_prompt() -> str:
+def extract_tipi_from_pdf(pdf_bytes: bytes, max_pages: int) -> pd.DataFrame:
     """
-    Instructions to ChatGPT for how to extract TIPI rows.
+    Extract rows from the TIPI PDF where NCM is in 0000.00.00 format,
+    capturing DESCRIPTION (which may span multiple lines) and ALIQUOTA.
+
+    We also stop after `max_pages` pages to avoid timeouts on very large PDFs.
     """
-    return """
-You are a Brazilian tax table extraction assistant.
 
-You are given the official TIPI PDF (Tabela de Incidência do Imposto sobre Produtos Industrializados).
+    # 1) NCM + description + aliquota on the same line
+    #    e.g. "2204.30.00 Outros mostos de uvas 10"
+    ncm_full = re.compile(r"^(\d{4}\.\d{2}\.\d{2})\s+(.+?)\s+(NT|\d+)\s*$")
 
-Task:
-- Read the TIPI table in the PDF.
-- Extract ONLY the rows where the NCM code is exactly in the format `0000.00.00`
-  (four digits, dot, two digits, dot, two digits).
+    # 2) NCM at the start of the line, but maybe without aliquota yet
+    ncm_only = re.compile(r"^(\d{4}\.\d{2}\.\d{2})\b")
 
-For each such row, output one line in **CSV** with the columns:
+    rows = []
+    current = None  # pending block when description continues to next lines
 
-NCM,Descricao,Aliquota
+    def normalize_description(parts):
+        desc = " ".join(parts)
+        desc = re.sub(r"\s+", " ", desc).strip(" -")
+        return desc
 
-Definitions and rules:
+    def finalize_current(cur):
+        return {
+            "NCM": cur["ncm"],
+            "Descricao": normalize_description(cur["desc_parts"]),
+            "Aliquota": cur["aliquota"],
+        }
 
-1. NCM:
-   - Keep it exactly as in the table, e.g. `2204.30.00`.
-   - Only include codes in the format `0000.00.00`.
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        total_pages = len(pdf.pages)
+        last_page_index = min(max_pages, total_pages)  # 1-based pages: 1..last_page_index
 
-2. Descricao:
-   - The full Portuguese description of that NCM line.
-   - If the description is broken across multiple lines in the PDF,
-     join them into a single line separated by spaces.
-   - Remove line breaks and unnecessary extra spaces.
+        for page_index in range(last_page_index):
+            page = pdf.pages[page_index]
+            text = page.extract_text()
+            if not text:
+                continue
 
-3. Aliquota:
-   - The TIPI IPI rate for that NCM, as shown in the table.
-   - Use only the numeric value (e.g. `0`, `5`, `10`) or the literal `NT`
-     if it is "não tributado".
-   - Do NOT include the percent sign `%`.
+            for raw_line in text.splitlines():
+                line = raw_line.rstrip()
+                stripped = line.strip()
+                if not stripped:
+                    continue
 
-Output format (very important):
-- Output **only** CSV, nothing else.
-- First line must be the header exactly:
-  `NCM,Descricao,Aliquota`
-- Each subsequent line: one NCM row.
-- Do not output explanations, comments, or any additional text.
-- Do not repeat the prompt.
-- Do not add extra columns.
+                # 1) Full match on a single line
+                m_full = ncm_full.match(stripped)
+                if m_full:
+                    if current and current.get("aliquota"):
+                        rows.append(finalize_current(current))
+                    current = None
 
-Be exhaustive and careful: include all valid NCM rows in the PDF.
-"""
+                    ncm, desc, aliquota = m_full.groups()
+                    rows.append(
+                        {
+                            "NCM": ncm,
+                            "Descricao": normalize_description([desc]),
+                            "Aliquota": aliquota,
+                        }
+                    )
+                    continue
 
+                # 2) Line starts with NCM but no aliquota (multi-line description case)
+                m_ncm = ncm_only.match(stripped)
+                if m_ncm:
+                    if current and current.get("aliquota"):
+                        rows.append(finalize_current(current))
 
-def call_openai_for_csv(file_obj, filename: str, model: str) -> str:
-    """
-    Send the uploaded PDF to OpenAI and get back CSV text.
-    """
-    client = get_client()
+                    ncm = m_ncm.group(1)
+                    rest = stripped[m_ncm.end():].strip()
+                    current = {
+                        "ncm": ncm,
+                        "desc_parts": [rest] if rest else [],
+                        "aliquota": None,
+                    }
+                    continue
 
-    # 1) Upload the PDF to OpenAI's Files API
-    uploaded = client.files.create(
-        file=file_obj,  # this is a file-like object from Streamlit uploader
-        purpose="user_data",
-    )
+                # 3) Continuation of an existing NCM block
+                if current:
+                    tokens = stripped.split()
+                    if not tokens:
+                        continue
 
-    # 2) Ask the model to extract CSV
-    prompt = build_extraction_prompt()
+                    last = tokens[-1]
 
-    response = client.responses.create(
-        model=model,
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_file",
-                        "file_id": uploaded.id,
-                    },
-                    {
-                        "type": "input_text",
-                        "text": prompt,
-                    },
-                ],
-            }
-        ],
-        temperature=0,
-    )
+                    # If the last token looks like an aliquota (e.g. 0, 10, NT)
+                    if re.fullmatch(r"(NT|\d+)", last):
+                        aliquota = last
+                        desc_extra = " ".join(tokens[:-1])
+                        if desc_extra:
+                            current["desc_parts"].append(desc_extra)
 
-    # New Responses API has a convenience property:
-    csv_text = response.output_text
+                        current["aliquota"] = aliquota
+                        rows.append(finalize_current(current))
+                        current = None
+                    else:
+                        # Just more description text
+                        current["desc_parts"].append(stripped)
 
-    if not csv_text:
-        raise RuntimeError("Model returned empty content.")
+    # End of PDF (or page limit): finalize block if it has an aliquota
+    if current and current.get("aliquota"):
+        rows.append(finalize_current(current))
 
-    return csv_text
+    # Remove duplicates (same NCM, description, aliquota)
+    unique = {(r["NCM"], r["Descricao"], r["Aliquota"]): r for r in rows}
+    rows = list(unique.values())
+
+    # Sort by NCM
+    rows.sort(key=lambda r: r["NCM"])
+
+    df = pd.DataFrame(rows, columns=["NCM", "Descricao", "Aliquota"])
+    return df
 
 
 if uploaded_file is not None:
-    st.info(
-        "When you click **Extract**, the PDF will be sent to OpenAI. "
-        "The model will read the entire TIPI and return CSV."
-    )
+    pdf_bytes = uploaded_file.read()
 
-    if st.button("🚀 Extract TIPI → CSV using ChatGPT"):
-        with st.spinner("Calling OpenAI to extract TIPI data... This may take a while."):
-            try:
-                # Important: Streamlit's UploadedFile is file-like, we can pass it directly.
-                csv_text = call_openai_for_csv(
-                    file_obj=uploaded_file, filename=uploaded_file.name, model=model_name
+    with st.spinner("🔎 Extracting TIPI data..."):
+        try:
+            df = extract_tipi_from_pdf(pdf_bytes, max_pages=int(max_pages))
+        except Exception as e:
+            st.error(f"Error while processing PDF: {e}")
+        else:
+            if df.empty:
+                st.warning(
+                    "No rows found with NCM in the format 0000.00.00.\n"
+                    "Check if the PDF is the official TIPI and if the layout matches the expected structure.\n\n"
+                    "You can also try increasing the 'Max pages to scan' value."
                 )
-            except Exception as e:
-                st.error(f"Error calling OpenAI: {e}")
             else:
-                # Try to parse the CSV text into a DataFrame
-                try:
-                    df = pd.read_csv(StringIO(csv_text))
-                except Exception as e:
-                    st.error(
-                        "OpenAI returned something that could not be parsed as CSV. "
-                        "Showing raw output below so you can inspect it."
-                    )
-                    st.code(csv_text[:5000], language="text")
-                else:
-                    st.success(
-                        f"✅ Extraction finished — {len(df)} rows "
-                        f"({df['NCM'].nunique()} unique NCM codes)."
-                    )
+                st.success(
+                    f"✅ Extraction finished — {len(df)} rows "
+                    f"({df['NCM'].nunique()} unique NCM codes) "
+                    f"from the first {int(max_pages)} page(s)."
+                )
 
-                    st.subheader("Preview (first 100 rows)")
-                    st.dataframe(df.head(100))
+                # Show last few NCMs so you know where the scan stopped
+                st.caption("Last 10 NCMs found in this run:")
+                st.dataframe(df.tail(10))
 
-                    # Export as tipi.csv
-                    csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
-                    st.download_button(
-                        "⬇️ Download tipi.csv",
-                        data=csv_bytes,
-                        file_name="tipi.csv",
-                        mime="text/csv",
-                    )
+                st.subheader("Preview (first 100 rows)")
+                st.dataframe(df.head(100))
+
+                csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
+
+                st.download_button(
+                    "⬇️ Download tipi.csv",
+                    data=csv_bytes,
+                    file_name="tipi.csv",
+                    mime="text/csv",
+                )
 else:
-    st.info("Upload the TIPI PDF to start.")
+    st.info("Upload the TIPI PDF to start the extraction.")
