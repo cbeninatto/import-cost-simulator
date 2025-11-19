@@ -39,7 +39,19 @@ def load_ncm_tec_table(
     # -------------------------
     # TEC: II (TEC %) + descrição por NCM
     # -------------------------
-    tec_raw = pd.read_excel(tec_path, sheet_name="TEC", header=None)
+    try:
+        tec_raw = pd.read_excel(tec_path, sheet_name="TEC", header=None)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Arquivo TEC não encontrado em '{tec_path}'. "
+            f"Confirme se o arquivo foi enviado para a pasta data/ com esse nome."
+        ) from e
+    except ValueError as e:
+        # Problema com nome da planilha
+        raise ValueError(
+            "Não foi possível encontrar a planilha 'TEC' dentro de tec.xlsx. "
+            "Confirme o nome da aba no arquivo TEC."
+        ) from e
 
     header_row = None
     for i in range(len(tec_raw)):
@@ -49,23 +61,27 @@ def load_ncm_tec_table(
             break
 
     if header_row is None:
-        raise RuntimeError("Não foi possível encontrar o cabeçalho (NCM / DESCRIÇÃO) na planilha TEC.")
+        raise RuntimeError(
+            "Não foi possível encontrar o cabeçalho (NCM / DESCRIÇÃO) na planilha TEC. "
+            "Verifique se o layout da planilha é o mesmo do arquivo original usado."
+        )
 
     tec = tec_raw.iloc[header_row:].copy()
     tec.columns = tec.iloc[0]  # primeira linha após header_row é o cabeçalho real
     tec = tec[1:]              # remove a linha de cabeçalho duplicada
 
+    # Normaliza NCM em formato 8 dígitos
     tec["NCM8"] = tec["NCM"].apply(_extract_ncm8_from_dotted)
     tec = tec[tec["NCM8"].notna()].copy()
 
-    # Converte TEC (%) para alíquota II (0.xx)
-    tec["II_rate"] = (
-        tec["TEC (%)"]
-        .astype(str)
-        .str.replace(",", ".", regex=False)
-        .astype(float)
-        / 100.0
-    )
+    # ------------ PARTE IMPORTANTE: parse robusto de TEC (%) ------------
+    # Exemplos de valores em TEC (%): "10", "10#", "16**", "0BIT", "14BK"
+    # Estratégia: extrair apenas a parte numérica inicial e converter.
+    tec_str = tec["TEC (%)"].astype(str).str.replace(",", ".", regex=False)
+    # Extrai primeiro número do tipo 10, 10.5 etc
+    num = tec_str.str.extract(r"(\d+(?:\.\d+)?)", expand=False)
+
+    tec["II_rate"] = pd.to_numeric(num, errors="coerce").fillna(0.0) / 100.0
 
     # NCM_dotted = coluna original "NCM"
     tec["NCM_dotted"] = tec["NCM"].astype(str).str.strip()
@@ -80,24 +96,22 @@ def load_ncm_tec_table(
     # -------------------------
     try:
         tipi = pd.read_csv(tipi_csv_path, dtype={"NCM8": str})
-        tipi["NCM8"] = tipi["NCM8"].astype(str).str.zfill(8)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Arquivo TIPI IPI CSV não encontrado em '{tipi_csv_path}'. "
+            f"Confirme se 'tipi_ipi_rates.csv' foi enviado para a pasta data/."
+        ) from e
 
-        tipi_small = tipi[["NCM8", "IPI_rate"]]
-    except FileNotFoundError:
-        # Se ainda não existir o CSV, apenas segue sem IPI_rate
-        tipi_small = pd.DataFrame(columns=["NCM8", "IPI_rate"])
+    tipi["NCM8"] = tipi["NCM8"].astype(str).str.zfill(8)
+    tipi_small = tipi[["NCM8", "IPI_rate"]]
 
     # -------------------------
     # Merge TEC + TIPI
     # -------------------------
-    if not tipi_small.empty:
-        merged = tec_small.merge(
-            tipi_small,
-            on="NCM8",
-            how="left",
-        )
-    else:
-        merged = tec_small.copy()
-        merged["IPI_rate"] = pd.NA
+    merged = tec_small.merge(
+        tipi_small,
+        on="NCM8",
+        how="left",
+    )
 
     return merged
