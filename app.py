@@ -4,12 +4,17 @@ import pandas as pd
 from calculations import ShipmentConfig, compute_landed_cost
 from ncm_loader import load_ncm_tec_table
 
-# Carrega tabela NCM + TEC + TIPI uma única vez
+# =========================
+# Carrega tabela NCM / TEC / TIPI
+# =========================
 try:
     NCM_TEC_TABLE = load_ncm_tec_table()
 except Exception:
     NCM_TEC_TABLE = None
 
+# =========================
+# Configuração básica
+# =========================
 st.set_page_config(
     page_title="Simulador de Custo de Importação",
     page_icon="📦",
@@ -24,6 +29,40 @@ st.markdown(
 )
 
 # =========================
+# Estado dos itens em sessão
+# =========================
+if "items_df" not in st.session_state:
+    st.session_state["items_df"] = pd.DataFrame(
+        columns=[
+            "NCM",
+            "Description",
+            "Quantity",
+            "FOB_Unit_USD",
+            "II_rate",
+            "IPI_rate",
+            "PIS_rate",
+            "COFINS_rate",
+            "ICMS_rate",
+        ]
+    )
+
+
+def normalize_ncm8_any_format(value: str) -> str | None:
+    """
+    Recebe NCM em formato '0000.00.00' ou '00000000' (ou parcial),
+    remove tudo que não for dígito e retorna os primeiros 8 dígitos,
+    preenchendo com zeros à direita se necessário.
+    """
+    if not isinstance(value, str):
+        return None
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if not digits:
+        return None
+    digits = digits[:8]
+    return digits.ljust(8, "0")
+
+
+# =========================
 # SIDEBAR – CONFIGURAÇÕES
 # =========================
 with st.sidebar:
@@ -36,8 +75,22 @@ with st.sidebar:
         index=0,
     )
 
-    # ICMS interno – por enquanto fixo 17% padrão (ajustável)
-    icms_aliq_padrao = 0.17
+    # ICMS interno – podemos definir padrão por estado (ex.: 17% para a maioria)
+    icms_map_default = {
+        "RS": 0.17,
+        "SC": 0.17,
+        "PR": 0.18,
+        "SP": 0.18,
+        "RJ": 0.20,
+        "MG": 0.18,
+        "ES": 0.17,
+        "BA": 0.18,
+        "GO": 0.17,
+        "DF": 0.18,
+        "Outros": 0.18,
+    }
+    icms_aliq_padrao = icms_map_default.get(estado_destino, 0.18)
+
     icms_aliq = st.number_input(
         "Alíquota interna de ICMS",
         value=icms_aliq_padrao,
@@ -45,6 +98,7 @@ with st.sidebar:
         max_value=1.0,
         step=0.01,
         format="%.2f",
+        help="Alíquota interna de ICMS usada para todos os itens (por enquanto)."
     )
 
     # Equipamento (modo de embarque)
@@ -128,175 +182,167 @@ with st.sidebar:
     )
 
 # =========================
-# TABELA DE ITENS
+# FORMULÁRIO – ADIÇÃO DE ITENS
 # =========================
 
-st.subheader("Itens da simulação")
+st.subheader("Adicionar item à simulação")
 
-# Tabela inicial vazia; usuário adiciona as linhas
-default_items = pd.DataFrame(
-    columns=[
-        "NCM",
-        "Description",
-        "Quantity",
-        "FOB_Unit_USD",
-        "Gross_Weight_kg",
-        "II_rate",
-        "IPI_rate",
-        "PIS_rate",
-        "COFINS_rate",
-        "ICMS_rate",
-    ]
-)
+if NCM_TEC_TABLE is None or NCM_TEC_TABLE.empty:
+    st.error(
+        "Não foi possível carregar a tabela de NCM/TEC/TIPI. "
+        "Verifique se os arquivos `data/tec.xlsx` e `data/tipi_ipi_rates.csv` estão corretos."
+    )
+else:
+    with st.form("add_item_form"):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            descricao_livre = st.text_input(
+                "Descrição do produto (livre)",
+                help="Texto livre para identificar o produto (ex.: 'corrediça telescópica 450mm zincada').",
+            )
 
-items_df = st.data_editor(
-    default_items,
-    num_rows="dynamic",
-    use_container_width=True,
-    key="items_editor",
-    column_config={
-        "NCM": st.column_config.TextColumn(
-            "NCM",
-            help="Código NCM da mercadoria (8 dígitos).",
-        ),
-        "Description": st.column_config.TextColumn(
-            "Descrição do produto",
-            help="Descrição para identificação interna na simulação.",
-        ),
-        "Quantity": st.column_config.NumberColumn(
-            "Quantidade",
-            help="Quantidade total desse item no embarque.",
-            min_value=0,
-            step=1,
-            format="%.0f",
-        ),
-        "FOB_Unit_USD": st.column_config.NumberColumn(
-            "FOB unitário (USD)",
-            help="Preço FOB unitário em dólares.",
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-        ),
-        "Gross_Weight_kg": st.column_config.NumberColumn(
-            "Peso bruto por unidade (kg)",
-            help="Opcional, usado se futuramente a alocação for por peso.",
-            min_value=0.0,
-            step=0.01,
-            format="%.3f",
-        ),
-        "II_rate": st.column_config.NumberColumn(
-            "Alíquota II",
-            help="Alíquota de Imposto de Importação (ex: 0,35 = 35%). Deixe 0 para usar valor oficial TEC.",
-            min_value=0.0,
-            max_value=1.0,
-            step=0.01,
-            format="%.4f",
-        ),
-        "IPI_rate": st.column_config.NumberColumn(
-            "Alíquota IPI",
-            help="Alíquota de IPI (ex: 0,065 = 6,5%). Deixe 0 para usar valor da TIPI.",
-            min_value=0.0,
-            max_value=1.0,
-            step=0.01,
-            format="%.4f",
-        ),
-        "PIS_rate": st.column_config.NumberColumn(
-            "Alíquota PIS-Importação",
-            help="Alíquota de PIS-Importação (ex: 0,021 = 2,1%).",
-            min_value=0.0,
-            max_value=1.0,
-            step=0.001,
-            format="%.4f",
-        ),
-        "COFINS_rate": st.column_config.NumberColumn(
-            "Alíquota COFINS-Importação",
-            help="Alíquota de COFINS-Importação (ex: 0,0965 = 9,65%).",
-            min_value=0.0,
-            max_value=1.0,
-            step=0.001,
-            format="%.4f",
-        ),
-        "ICMS_rate": st.column_config.NumberColumn(
-            "Alíquota ICMS específica",
-            help=(
-                "Opcional. Se deixar em branco ou 0, será usada a alíquota de ICMS "
-                "informada na barra lateral."
-            ),
-            min_value=0.0,
-            max_value=1.0,
-            step=0.01,
-            format="%.4f",
-        ),
-    },
-)
+        with col_b:
+            ncm_input = st.text_input(
+                "NCM (0000.00.00 ou 00000000)",
+                help="Você pode digitar o NCM completo ou parcial; o sistema sugerirá opções.",
+            )
 
-st.caption(
-    "Clique em **+** para adicionar novas linhas. "
-    "Preencha **NCM**, **Descrição**, **Quantidade**, **FOB unitário (USD)** e as alíquotas de "
-    "**PIS / COFINS**. "
-    "Se deixar **II_rate = 0**, será usada a alíquota oficial da TEC. "
-    "Se deixar **IPI_rate = 0**, será usada a alíquota oficial da TIPI (quando disponível). "
-    "Se deixar **ICMS_rate = 0**, será usada a alíquota de ICMS informada na barra lateral."
-)
+        col_c, col_d = st.columns(2)
+        with col_c:
+            quantidade = st.number_input(
+                "Quantidade",
+                min_value=1,
+                value=1,
+                step=1,
+            )
+        with col_d:
+            fob_unit = st.number_input(
+                "FOB unitário (USD)",
+                min_value=0.0,
+                value=1.00,
+                step=0.01,
+                format="%.4f",
+            )
+
+        st.markdown("### Sugestões de NCM")
+
+        # Busca por NCM ou descrição
+        matches = pd.DataFrame()
+        if ncm_input.strip():
+            ncm8_search = normalize_ncm8_any_format(ncm_input)
+            if ncm8_search is not None:
+                matches = NCM_TEC_TABLE[
+                    NCM_TEC_TABLE["NCM8"].astype(str).str.startswith(ncm8_search)
+                ].copy()
+        elif descricao_livre.strip():
+            tokens = [t for t in descricao_livre.lower().split() if t]
+            df = NCM_TEC_TABLE.copy()
+            if tokens:
+                mask = pd.Series(True, index=df.index)
+                for t in tokens:
+                    mask &= df["Descricao"].str.lower().str.contains(t, na=False)
+                matches = df[mask].copy()
+
+        if not matches.empty:
+            matches = matches.sort_values("NCM8").head(50)
+            option_indices = matches.index.tolist()
+
+            selected_idx = st.selectbox(
+                "Selecione o NCM sugerido",
+                options=option_indices,
+                format_func=lambda idx: f"{matches.loc[idx, 'NCM_dotted']} — {matches.loc[idx, 'Descricao']}",
+            )
+        else:
+            selected_idx = None
+            st.info("Nenhum NCM sugerido ainda. Digite parte do NCM ou da descrição para buscar.")
+
+        submitted = st.form_submit_button("➕ Adicionar item")
+
+        if submitted:
+            if selected_idx is None:
+                st.error("Selecione um NCM sugerido antes de adicionar o item.")
+            else:
+                row = matches.loc[selected_idx]
+
+                # Descrição final: prioridade para descrição livre do usuário
+                descricao_final = descricao_livre.strip() or str(row["Descricao"])
+
+                # Alíquotas oficiais (quando existirem)
+                ii_rate = row.get("II_rate", 0.0)
+                if pd.isna(ii_rate):
+                    ii_rate = 0.0
+
+                ipi_rate = row.get("IPI_rate", 0.0)
+                if pd.isna(ipi_rate):
+                    ipi_rate = 0.0
+
+                # PIS/COFINS padrão importação (podemos sofisticar depois por NCM)
+                pis_rate = 0.021   # 2,1%
+                cofins_rate = 0.0965  # 9,65%
+
+                new_item = {
+                    "NCM": row["NCM_dotted"],
+                    "Description": descricao_final,
+                    "Quantity": float(quantidade),
+                    "FOB_Unit_USD": float(fob_unit),
+                    "II_rate": float(ii_rate),
+                    "IPI_rate": float(ipi_rate),
+                    "PIS_rate": float(pis_rate),
+                    "COFINS_rate": float(cofins_rate),
+                    "ICMS_rate": 0.0,  # sempre usamos a alíquota interna da barra lateral
+                }
+
+                st.session_state["items_df"] = pd.concat(
+                    [st.session_state["items_df"], pd.DataFrame([new_item])],
+                    ignore_index=True,
+                )
+
+                st.success(f"Item com NCM {row['NCM_dotted']} adicionado à simulação.")
+
+# =========================
+# LISTA DE ITENS ADICIONADOS
+# =========================
+
+st.subheader("Itens adicionados")
+
+if st.session_state["items_df"].empty:
+    st.info("Nenhum item adicionado ainda. Use o formulário acima para incluir produtos.")
+else:
+    st.dataframe(
+        st.session_state["items_df"][["NCM", "Description", "Quantity", "FOB_Unit_USD"]],
+        use_container_width=True,
+    )
+
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        if st.button("🗑️ Remover último item"):
+            st.session_state["items_df"] = st.session_state["items_df"].iloc[:-1, :].copy()
+    with col_r2:
+        if st.button("🧹 Limpar todos os itens"):
+            st.session_state["items_df"] = st.session_state["items_df"].iloc[0:0].copy()
 
 # =========================
 # BOTÃO CALCULAR
 # =========================
 
-if st.button("Calcular custo de importação"):
-    # Remove linhas completamente vazias (sem NCM e sem quantidade)
-    clean_df = items_df.copy()
-    clean_df = clean_df[
-        ~(clean_df["NCM"].isna() & clean_df["Quantity"].isna())
-    ]
+st.markdown("---")
 
-    if clean_df.empty:
+if st.button("Calcular custo de importação"):
+    items_df = st.session_state["items_df"]
+
+    if items_df.empty:
         st.warning("Adicione pelo menos um item à simulação.")
     else:
-        # -----------------------------
-        # Auto-preencher II/IPI por NCM
-        # -----------------------------
-        if NCM_TEC_TABLE is not None:
-            # Normaliza NCM → NCM8
-            clean_df["NCM8"] = (
-                clean_df["NCM"]
-                .astype(str)
-                .str.replace(".", "", regex=False)
-                .str.zfill(8)
-            )
+        clean_df = items_df.copy()
 
-            # Garante colunas numéricas básicas (caso venham vazias)
-            for col in ["II_rate", "IPI_rate"]:
-                if col not in clean_df.columns:
-                    clean_df[col] = 0.0
-                clean_df[col] = clean_df[col].fillna(0.0)
+        # Garantir tipos numéricos
+        for col in ["Quantity", "FOB_Unit_USD", "II_rate", "IPI_rate", "PIS_rate", "COFINS_rate", "ICMS_rate"]:
+            if col not in clean_df.columns:
+                clean_df[col] = 0.0
+            clean_df[col] = clean_df[col].fillna(0.0).astype(float)
 
-            # Junta com tabela de NCM (II/IPI oficiais)
-            clean_df = clean_df.merge(
-                NCM_TEC_TABLE[["NCM8", "II_rate", "IPI_rate"]],
-                on="NCM8",
-                how="left",
-                suffixes=("", "_from_table"),
-            )
-
-            # Usa II da tabela se usuário deixou 0
-            clean_df["II_rate"] = clean_df["II_rate"].fillna(0.0)
-            clean_df["II_rate_from_table"] = clean_df["II_rate_from_table"].fillna(0.0)
-            mask_use_ii = clean_df["II_rate"] == 0.0
-            clean_df.loc[mask_use_ii, "II_rate"] = clean_df.loc[mask_use_ii, "II_rate_from_table"]
-
-            # Usa IPI da tabela se usuário deixou 0
-            clean_df["IPI_rate"] = clean_df["IPI_rate"].fillna(0.0)
-            clean_df["IPI_rate_from_table"] = clean_df["IPI_rate_from_table"].fillna(0.0)
-            mask_use_ipi = clean_df["IPI_rate"] == 0.0
-            clean_df.loc[mask_use_ipi, "IPI_rate"] = clean_df.loc[mask_use_ipi, "IPI_rate_from_table"]
-
-            # Limpa colunas auxiliares
-            clean_df.drop(
-                columns=["NCM8", "II_rate_from_table", "IPI_rate_from_table"],
-                inplace=True,
-                errors="ignore",
-            )
+        # Define ICMS_rate por item a partir do estado (um único ICMS interno por enquanto)
+        clean_df["ICMS_rate"] = float(icms_aliq)
 
         # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
         if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
