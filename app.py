@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from calculations import ShipmentConfig, compute_landed_cost
+from ncm_loader import load_ncm_tec_table
 
 st.set_page_config(
     page_title="Simulador de Custo de Importação",
@@ -15,6 +16,14 @@ st.markdown(
     "Simule o **custo Brasil** de uma importação com vários produtos no mesmo embarque, "
     "incluindo impostos, frete internacional e transporte rodoviário."
 )
+
+# Carrega tabela NCM + TEC (II) uma única vez
+try:
+    NCM_TEC_TABLE = load_ncm_tec_table()
+except Exception as e:
+    NCM_TEC_TABLE = None
+    # Em produção você pode querer logar isso:
+    # st.sidebar.error(f"Erro ao carregar tabela de NCM/TEC: {e}")
 
 # =========================
 # SIDEBAR – CONFIGURAÇÕES
@@ -311,6 +320,30 @@ if st.button("Calcular custo de importação"):
             "Landed_Cost_BRL",
             "Unit_Cost_BRL",
         ]
+
+                # --- Auto-preenchimento da alíquota de II a partir da tabela NCM/TEC ---
+        if NCM_TEC_TABLE is not None and not clean_df.empty:
+            # Garante que NCM está em formato string de 8 dígitos
+            clean_df["NCM8"] = clean_df["NCM"].astype(str).str.replace(".", "", regex=False).str.zfill(8)
+
+            # Junta com tabela de II por NCM
+            clean_df = clean_df.merge(
+                NCM_TEC_TABLE[["NCM8", "II_rate"]],
+                on="NCM8",
+                how="left",
+                suffixes=("", "_from_tec"),
+            )
+
+            # Se II_rate estiver vazio/0, usa o valor da TEC
+            clean_df["II_rate"] = clean_df["II_rate"].fillna(0.0)
+            clean_df["II_rate_from_tec"] = clean_df["II_rate_from_tec"].fillna(0.0)
+
+            mask_use_tec = clean_df["II_rate"] == 0.0
+            clean_df.loc[mask_use_tec, "II_rate"] = clean_df.loc[mask_use_tec, "II_rate_from_tec"]
+
+            # Remove coluna auxiliar
+            clean_df.drop(columns=["NCM8", "II_rate_from_tec"], inplace=True)
+
 
         display_df = per_item[cols_to_show].rename(
             columns={
