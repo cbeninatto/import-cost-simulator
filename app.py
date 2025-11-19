@@ -3,7 +3,11 @@ import pandas as pd
 
 from calculations import ShipmentConfig, compute_landed_cost
 
-st.set_page_config(page_title="Simulador de Custo de Importação", page_icon="📦", layout="wide")
+st.set_page_config(
+    page_title="Simulador de Custo de Importação",
+    page_icon="📦",
+    layout="wide"
+)
 
 st.title("📦 Simulador de Custo de Importação")
 
@@ -88,30 +92,32 @@ with st.sidebar:
         "Uso das mercadorias",
         ["Indústria", "Revenda"],
         index=1,
-        help="Ambas as opções são tratadas como mercadorias para revenda/industrialização em termos de créditos."
+        help="Ambas as opções são tratadas como mercadorias para revenda/industrialização em termos de créditos.",
     )
 
-    # Internamente, tratamos Indústria e Revenda como 'resale' (mercadoria geradora de crédito)
+    # Internamente, tratamos Indústria e Revenda como 'resale'
     purpose = "resale"
 
-    st.subheader("Incoterm (alocação de custos compartilhados)")
+    st.subheader("Incoterm")
 
-    incoterm_opcao = st.selectbox(
+    incoterm = st.selectbox(
         "Incoterm",
-        ["FOB (alocar por valor FOB)", "Peso (alocar por peso)"],
+        ["EXW", "FOB", "CIF"],
         index=0,
+        help=(
+            "Por enquanto, o Incoterm é usado apenas como informação na simulação. "
+            "Os custos compartilhados (frete, seguro etc.) são alocados entre os itens "
+            "proporcionalmente ao valor FOB."
+        ),
     )
 
-    if incoterm_opcao.startswith("FOB"):
-        allocation_method = "FOB"
-    else:
-        allocation_method = "WEIGHT"
+    # Por enquanto, mantemos a alocação sempre por valor FOB
+    allocation_method = "FOB"
 
     st.caption(
         "Por padrão, o seguro internacional é calculado como **0,10% ad valorem** "
-        "sobre o valor FOB total (quando não informado manualmente). "
-        "AFRMM (8% sobre o frete marítimo) e Taxa Siscomex (R$ 154,23) "
-        "são incluídos automaticamente na base do ICMS para embarques marítimos."
+        "sobre o valor FOB total. AFRMM (8% sobre o frete marítimo) e Taxa Siscomex "
+        "(R$ 154,23) são incluídos automaticamente na base do ICMS para embarques marítimos."
     )
 
 # =========================
@@ -137,7 +143,6 @@ default_items = pd.DataFrame(
     ]
 )
 
-# Editor de itens
 items_df = st.data_editor(
     default_items,
     num_rows="dynamic",
@@ -159,18 +164,17 @@ if st.button("Calcular custo de importação"):
     if items_df.empty:
         st.warning("Adicione pelo menos um item à simulação.")
     else:
-        # Configuração padrão de AFRMM / Siscomex / Seguro / Custos locais
         # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
         if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
             afrmm_pct = 0.08
         else:
             afrmm_pct = 0.0
 
-        # Seguro: 0,10% ad valorem sobre o FOB total (definimos apenas o %; o cálculo é feito em calculations.py)
+        # Seguro: 0,10% ad valorem sobre o FOB total (cálculo feito em calculations.py)
         insurance_usd = 0.0
         insurance_pct = 0.001  # 0,1%
 
-        # Encargos de origem e THC: por enquanto assumimos 0 na simulação base
+        # Encargos de origem e THC: por enquanto 0 na simulação base
         origin_charges_usd = 0.0
         thc_origin_usd = 0.0
 
@@ -228,7 +232,6 @@ if st.button("Calcular custo de importação"):
             "Unit_Cost_BRL",
         ]
 
-        # Renomear colunas para exibição em PT-BR (sem mexer nos nomes internos)
         display_df = per_item[cols_to_show].rename(
             columns={
                 "Description": "Descrição",
@@ -257,7 +260,10 @@ if st.button("Calcular custo de importação"):
             st.metric("FOB total (R$)", f"{summary['FOB_total_BRL']:,.2f}")
             st.metric("Valor aduaneiro total (R$)", f"{summary['VA_total_BRL']:,.2f}")
             st.metric("Custo total landed (R$)", f"{summary['Landed_total_BRL']:,.2f}")
-            st.metric("Fator FOB → Custo Brasil", f"{summary['FOB_to_Brazil_factor']:.2f}x")
+            st.metric(
+                "Fator FOB → Custo Brasil",
+                f"{summary['FOB_to_Brazil_factor']:.2f}x",
+            )
         with col2:
             st.metric("Impostos pagos (R$)", f"{summary['Tax_paid_total_BRL']:,.2f}")
             st.metric("Créditos de impostos (R$)", f"{summary['Tax_credit_total_BRL']:,.2f}")
