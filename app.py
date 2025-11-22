@@ -15,45 +15,58 @@ st.set_page_config(
 )
 
 # =========================
-# Minimalist styling
+# Global styling (light, minimalist, responsive cards)
 # =========================
 st.markdown(
     """
     <style>
-        /* Centraliza e estreita o conteúdo para ficar melhor no desktop e mobile */
-        .block-container {
-            max-width: 960px;
-            padding-top: 1rem;
-            padding-bottom: 2rem;
-        }
-
-        /* Fundo bem claro */
         body {
-            background-color: #f6f7fb;
+            background-color: #f3f4f6;
         }
-
-        /* Títulos mais discretos */
-        h1 {
-            font-size: 1.7rem !important;
-            margin-bottom: 0.4rem !important;
+        .block-container {
+            padding-top: 1.2rem;
+            padding-bottom: 3rem;
         }
-        h3 {
-            font-size: 1.15rem !important;
-            margin-top: 1.2rem !important;
-            margin-bottom: 0.4rem !important;
+        .step-card {
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 1.25rem 1.5rem;
+            border: 1px solid #e5e7eb;
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+            margin-bottom: 1rem;
         }
-
-        /* Inputs com fonte um pouco menor */
-        .stTextInput > div > div > input,
-        .stNumberInput > div > div > input,
-        .stSelectbox > div > div > div {
-            font-size: 0.9rem;
+        .step-title {
+            font-size: 0.8rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: #6b7280;
+            margin-bottom: 0.15rem;
         }
-
-        /* Métricas mais compactas */
-        .stMetric {
-            padding-top: 0 !important;
-            padding-bottom: 0.1rem !important;
+        .section-heading {
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: #111827;
+            margin-bottom: 0.35rem;
+        }
+        .section-subtitle {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 0.75rem;
+        }
+        .small-muted {
+            font-size: 0.8rem;
+            color: #6b7280;
+        }
+        /* Compact metrics */
+        div[data-testid="stMetric"] {
+            padding-top: 0.25rem;
+            padding-bottom: 0.25rem;
+        }
+        /* Make tables a bit cleaner */
+        .stTable td, .stTable th {
+            font-size: 0.85rem;
+            padding: 0.3rem 0.5rem;
         }
     </style>
     """,
@@ -63,22 +76,19 @@ st.markdown(
 st.title("📦 Simulador de Custo de Importação")
 
 st.markdown(
-    "Simule o **custo Brasil** de um embarque com vários produtos, "
+    "Calcule o **custo Brasil** de um embarque com vários produtos, "
     "incluindo impostos, frete internacional e transporte rodoviário."
 )
-
 
 # =========================
 # Load NCM / II / IPI table
 # =========================
 LOAD_ERROR = None
 try:
-    # This reads data/combined_taxes.csv via ncm_loader.py
     NCM_TABLE = load_ncm_tec_table()
 except Exception as e:
     NCM_TABLE = None
     LOAD_ERROR = repr(e)
-
 
 # =========================
 # Session state for items
@@ -87,7 +97,7 @@ if "items_df" not in st.session_state:
     st.session_state["items_df"] = pd.DataFrame(
         columns=[
             "NCM",
-            "Description",
+            "Description",      # product name / code (user reference)
             "Quantity",
             "FOB_Unit_USD",
             "II_rate",
@@ -101,8 +111,8 @@ if "items_df" not in st.session_state:
 
 def normalize_ncm_search(value: str):
     """
-    Take user input for NCM (0000.00.00, 00000000 or partial),
-    strip to digits and return the raw digit string for prefix search.
+    Normalize user input for NCM (0000.00.00, 00000000 or partial).
+    Returns only the digit string for prefix search.
     """
     if not isinstance(value, str):
         return None
@@ -113,235 +123,284 @@ def normalize_ncm_search(value: str):
 
 
 # =========================
-# PASSO 1 – CONFIGURAÇÕES DO EMBARQUE
+# STEP 1 – SHIPMENT CONFIG
 # =========================
-st.markdown("### Passo 1 – Configurações do embarque")
-
-config_col1, config_col2 = st.columns(2)
-
-with config_col1:
-    # Estado de destino
-    estado_destino = st.selectbox(
-        "Estado de destino (UF)",
-        ["RS", "SC", "PR", "SP", "RJ", "MG", "ES", "BA", "GO", "DF", "Outros"],
-        index=0,
+with st.container():
+    st.markdown('<div class="step-card">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="step-title">Passo 1</div>'
+        '<div class="section-heading">Configurações do embarque</div>'
+        '<div class="section-subtitle">Defina o estado de destino, câmbio, frete e regime tributário.</div>',
+        unsafe_allow_html=True,
     )
 
-    # ICMS interno – default por estado (ajustável)
-    icms_map_default = {
-        "RS": 0.17,
-        "SC": 0.17,
-        "PR": 0.18,
-        "SP": 0.18,
-        "RJ": 0.20,
-        "MG": 0.18,
-        "ES": 0.17,
-        "BA": 0.18,
-        "GO": 0.17,
-        "DF": 0.18,
-        "Outros": 0.18,
-    }
-    icms_aliq_padrao = icms_map_default.get(estado_destino, 0.18)
+    config_col1, config_col2 = st.columns(2)
 
-    icms_aliq = st.number_input(
-        "Alíquota interna de ICMS",
-        value=icms_aliq_padrao,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        format="%.2f",
-        help="Alíquota interna de ICMS usada para todos os itens (por enquanto).",
-    )
-
-    # Equipamento (modo de embarque)
-    equipamento = st.selectbox(
-        "Equipamento (tipo de embarque)",
-        ["FCL_20", "FCL_40", "LCL", "AIR"],
-        index=2,
-        help="Usado para definir se há AFRMM (marítimo) ou não (aéreo).",
-    )
-
-    # Câmbio
-    cambio = st.number_input(
-        "Câmbio USD → BRL",
-        value=5.50,
-        min_value=0.0,
-        step=0.01,
-        format="%.4f",
-    )
-
-with config_col2:
-    st.markdown("##### Custos principais")
-
-    frete_usd = st.number_input(
-        "Frete internacional (USD)",
-        value=0.0,
-        min_value=0.0,
-        step=10.0,
-    )
-
-    transporte_rodoviario_brl = st.number_input(
-        "Transporte rodoviário até o destino (R$)",
-        value=0.0,
-        min_value=0.0,
-        step=50.0,
-    )
-
-    st.markdown("##### Regime e uso")
-
-    regime_label = st.selectbox(
-        "Regime tributário da empresa",
-        ["Simples Nacional", "Lucro Presumido", "Lucro Real"],
-        index=1,
-    )
-
-    regime_map = {
-        "Simples Nacional": "simples",
-        "Lucro Presumido": "presumido",
-        "Lucro Real": "real",
-    }
-    regime = regime_map[regime_label]
-
-    uso_label = st.selectbox(
-        "Uso das mercadorias",
-        ["Indústria", "Revenda"],
-        index=1,
-        help="Tratado como mercadorias para revenda/industrialização para fins de crédito.",
-    )
-
-    # Internamente, tratamos ambos como 'resale'
-    purpose = "resale"
-
-    st.markdown("##### Incoterm")
-
-    incoterm = st.selectbox(
-        "Incoterm",
-        ["EXW", "FOB", "CIF"],
-        index=0,
-        help=(
-            "Por enquanto, o Incoterm é apenas informativo. "
-            "Custos compartilhados são alocados proporcionalmente ao FOB."
-        ),
-    )
-
-    allocation_method = "FOB"
-
-st.caption(
-    "Seguro padrão: **0,10% ad valorem** sobre o FOB total (se não informado). "
-    "AFRMM (8% sobre o frete) e Taxa Siscomex (R$ 154,23) são incluídos "
-    "automaticamente na base do ICMS para embarques marítimos."
-)
-
-
-# =========================
-# PASSO 2 – ITENS DA SIMULAÇÃO
-# =========================
-st.markdown("### Passo 2 – Itens da simulação")
-
-st.subheader("Adicionar item")
-
-if NCM_TABLE is None:
-    st.error(
-        "Não foi possível carregar a tabela de NCM/II/IPI. "
-        "Verifique se o arquivo `data/combined_taxes.csv` está presente e com o layout correto."
-    )
-    if LOAD_ERROR:
-        st.code(f"Detalhes técnicos:\n{LOAD_ERROR}", language="text")
-else:
-    if NCM_TABLE.empty:
-        st.warning(
-            "A tabela NCM/II/IPI foi carregada, mas está vazia. "
-            "Provavelmente há um problema de layout em `combined_taxes.csv`."
+    with config_col1:
+        # Estado de destino
+        estado_destino = st.selectbox(
+            "Estado de destino (UF)",
+            ["RS", "SC", "PR", "SP", "RJ", "MG", "ES", "BA", "GO", "DF", "Outros"],
+            index=0,
         )
 
-    with st.form("add_item_form"):
-        col_a, col_b = st.columns(2)
-        with col_a:
-            descricao_livre = st.text_input(
-                "Descrição do produto",
-                help="Ex.: 'corrediça telescópica 450mm zincada'.",
+        # ICMS interno – default por estado (ajustável)
+        icms_map_default = {
+            "RS": 0.17,
+            "SC": 0.17,
+            "PR": 0.18,
+            "SP": 0.18,
+            "RJ": 0.20,
+            "MG": 0.18,
+            "ES": 0.17,
+            "BA": 0.18,
+            "GO": 0.17,
+            "DF": 0.18,
+            "Outros": 0.18,
+        }
+        icms_aliq_padrao = icms_map_default.get(estado_destino, 0.18)
+
+        icms_aliq = st.number_input(
+            "Alíquota interna de ICMS",
+            value=icms_aliq_padrao,
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            format="%.2f",
+            help="Alíquota interna de ICMS usada como base para o cálculo (por enquanto, única para todos os itens).",
+        )
+
+        # Equipamento (modo de embarque)
+        equipamento = st.selectbox(
+            "Equipamento (tipo de embarque)",
+            ["FCL_20", "FCL_40", "LCL", "AIR"],
+            index=2,
+            help="Usado para definir se há AFRMM (marítimo) ou não (aéreo).",
+        )
+
+        # Câmbio
+        cambio = st.number_input(
+            "Câmbio USD → BRL",
+            value=5.50,
+            min_value=0.0,
+            step=0.01,
+            format="%.4f",
+        )
+
+    with config_col2:
+        st.markdown("###### Custos principais")
+
+        frete_usd = st.number_input(
+            "Frete internacional (USD)",
+            value=0.0,
+            min_value=0.0,
+            step=10.0,
+        )
+
+        transporte_rodoviario_brl = st.number_input(
+            "Transporte rodoviário até o destino (R$)",
+            value=0.0,
+            min_value=0.0,
+            step=50.0,
+        )
+
+        st.markdown("###### Regime e uso")
+
+        regime_label = st.selectbox(
+            "Regime tributário da empresa",
+            ["Simples Nacional", "Lucro Presumido", "Lucro Real"],
+            index=1,
+        )
+
+        regime_map = {
+            "Simples Nacional": "simples",
+            "Lucro Presumido": "presumido",
+            "Lucro Real": "real",
+        }
+        regime = regime_map[regime_label]
+
+        uso_label = st.selectbox(
+            "Uso das mercadorias",
+            ["Indústria", "Revenda"],
+            index=1,
+            help="Usado para definir se a importação gera créditos (tratado como mercadorias para revenda/industrialização).",
+        )
+
+        # Internamente, tratamos ambos como 'resale'
+        purpose = "resale"
+
+        st.markdown("###### Incoterm")
+
+        incoterm = st.selectbox(
+            "Incoterm",
+            ["EXW", "FOB", "CIF"],
+            index=0,
+            help=(
+                "Por enquanto, o Incoterm é apenas informativo. "
+                "Custos compartilhados são alocados proporcionalmente ao FOB."
+            ),
+        )
+
+        allocation_method = "FOB"
+
+    st.markdown(
+        '<div class="small-muted">'
+        "Seguro padrão: <strong>0,10% ad valorem</strong> sobre o FOB total (se não informado). "
+        "AFRMM (8% sobre o frete) e Taxa Siscomex (R$ 154,23) são incluídos automaticamente "
+        "na base do ICMS para embarques marítimos."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =========================
+# STEP 2 – ITEMS
+# =========================
+with st.container():
+    st.markdown('<div class="step-card">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="step-title">Passo 2</div>'
+        '<div class="section-heading">Itens da simulação</div>'
+        '<div class="section-subtitle">Informe o código/nome do produto, selecione o NCM e o valor FOB.</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.subheader("Adicionar item", anchor=False)
+
+    if NCM_TABLE is None:
+        st.error(
+            "Não foi possível carregar a tabela de NCM/II/IPI. "
+            "Verifique se o arquivo `data/combined_taxes.csv` está presente e com o layout correto."
+        )
+        if LOAD_ERROR:
+            st.code(f"Detalhes técnicos:\n{LOAD_ERROR}", language="text")
+    else:
+        if NCM_TABLE.empty:
+            st.warning(
+                "A tabela NCM/II/IPI foi carregada, mas está vazia. "
+                "Provavelmente há um problema de layout em `combined_taxes.csv`."
             )
 
-        with col_b:
-            ncm_input = st.text_input(
-                "NCM (0000.00.00 ou 00000000)",
-                help="Digite o NCM completo ou parcial; o sistema sugerirá opções.",
-            )
+        with st.form("add_item_form"):
+            # Linha 1: código / nome interno do produto
+            col_prod, = st.columns(1)
+            with col_prod:
+                product_ref = st.text_input(
+                    "Código ou nome do produto (referência interna)",
+                    help="Ex.: MV150-ZN-450, Bolsa Neo Preta, etc. Apenas para seu controle.",
+                )
 
-        col_c, col_d = st.columns(2)
-        with col_c:
-            quantidade = st.number_input(
-                "Quantidade",
-                min_value=1,
-                value=1,
-                step=1,
-            )
-        with col_d:
-            fob_unit = st.number_input(
-                "FOB unitário (USD)",
-                min_value=0.0,
-                value=1.00,
-                step=0.01,
-                format="%.4f",
-            )
+            # Linha 2: NCM + busca
+            col_ncm, col_desc = st.columns([1, 1.2])
+            with col_ncm:
+                ncm_input = st.text_input(
+                    "NCM (0000.00.00 ou 00000000)",
+                    help="Digite o NCM completo ou parcial. O sistema filtrará os códigos finais (8 dígitos).",
+                )
 
-        st.markdown("##### Sugestões de NCM")
+            with col_desc:
+                search_hint = st.text_input(
+                    "Busca por descrição (opcional)",
+                    help="Use palavras-chave do TEC/TIPI (ex.: 'assento', 'bolsas', 'corrediças').",
+                )
 
-        matches = pd.DataFrame()
+            # Linha 3: quantidade + FOB unitário
+            col_qtd, col_fob = st.columns(2)
+            with col_qtd:
+                quantidade = st.number_input(
+                    "Quantidade",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                )
+            with col_fob:
+                fob_unit = st.number_input(
+                    "FOB unitário (USD)",
+                    min_value=0.0,
+                    value=1.00,
+                    step=0.01,
+                    format="%.4f",
+                )
 
-        # Busca por NCM (prefixo de dígitos)
-        if ncm_input.strip():
-            digits = normalize_ncm_search(ncm_input)
-            if digits is not None and "digits" in NCM_TABLE.columns:
-                matches = NCM_TABLE[NCM_TABLE["digits"].str.startswith(digits)].copy()
+            st.markdown("##### Sugestões de NCM finais (8 dígitos)")
 
-        # Ou busca por descrição
-        elif descricao_livre.strip():
-            tokens = [t for t in descricao_livre.lower().split() if t]
-            df_search = NCM_TABLE.copy()
-            if tokens:
-                mask = pd.Series(True, index=df_search.index)
-                for t in tokens:
-                    mask &= df_search["Descricao"].str.lower().str.contains(t, na=False)
-                matches = df_search[mask].copy()
+            matches = pd.DataFrame()
 
-        if not matches.empty:
-            sort_cols = ["NCM_dotted"]
-            if "digits_len" in matches.columns:
-                sort_cols = ["digits_len", "NCM_dotted"]
-            matches = matches.sort_values(sort_cols).head(100)
-            option_indices = matches.index.tolist()
+            # Busca por NCM (prefixo de dígitos)
+            if ncm_input.strip():
+                digits = normalize_ncm_search(ncm_input)
+                if digits is not None and "digits" in NCM_TABLE.columns:
+                    tmp = NCM_TABLE.copy()
+                    tmp = tmp[tmp["digits"].str.startswith(digits)]
+                    # apenas códigos finais (8 dígitos)
+                    if "digits_len" in tmp.columns:
+                        tmp = tmp[tmp["digits_len"] == 8]
+                    matches = tmp
 
-            selected_idx = st.selectbox(
-                "Selecione o NCM sugerido",
-                options=option_indices,
-                format_func=lambda idx: (
-                    f"{matches.loc[idx, 'NCM_dotted']}  {matches.loc[idx, 'Descricao']}"
-                ),
-            )
-        else:
-            selected_idx = None
-            st.info(
-                "Nenhum NCM sugerido ainda. "
-                "Digite parte do NCM ou da descrição para buscar."
-            )
+            # Ou busca por descrição
+            elif search_hint.strip():
+                tokens = [t for t in search_hint.lower().split() if t]
+                df_search = NCM_TABLE.copy()
+                if tokens:
+                    mask = pd.Series(True, index=df_search.index)
+                    for t in tokens:
+                        mask &= df_search["Descricao"].str.lower().str.contains(t, na=False)
+                    tmp = df_search[mask]
+                    if "digits_len" in tmp.columns:
+                        tmp = tmp[tmp["digits_len"] == 8]
+                    matches = tmp
 
-        submitted = st.form_submit_button("➕ Adicionar item")
+            if not matches.empty:
+                # ordenar por NCM completo
+                sort_cols = ["NCM_dotted"]
+                matches = matches.sort_values(sort_cols).head(80)
+                option_indices = matches.index.tolist()
 
-        if submitted:
-            if selected_idx is None:
-                st.error("Selecione um NCM sugerido antes de adicionar o item.")
+                def format_ncm_option(idx):
+                    row = matches.loc[idx]
+                    code = str(row.get("NCM_dotted", "")).strip()
+                    desc = str(row.get("Descricao", "")).strip()
+
+                    ii = row.get("II_rate", 0.0)
+                    ipi = row.get("IPI_rate", 0.0)
+
+                    try:
+                        ii_pct = f"{ii * 100:.1f}%"
+                    except Exception:
+                        ii_pct = "-"
+                    try:
+                        ipi_pct = f"{ipi * 100:.1f}%"
+                    except Exception:
+                        ipi_pct = "-"
+
+                    return f"{code}  {desc}  • II {ii_pct}  |  IPI {ipi_pct}"
+
+                selected_idx = st.selectbox(
+                    "Selecione o NCM final",
+                    options=option_indices,
+                    format_func=format_ncm_option,
+                )
+
             else:
-                row = matches.loc[selected_idx]
-                digits_len = int(row.get("digits_len", 0)) if "digits_len" in row else 0
+                selected_idx = None
+                st.info(
+                    "Nenhum NCM final listado ainda. "
+                    "Digite parte do NCM ou use palavras da descrição para buscar."
+                )
 
-                # Only allow adding final 8-digit NCMs (0000.00.00)
-                if digits_len != 8:
-                    st.error(
-                        "Selecione um NCM de 8 dígitos (formato 0000.00.00) para adicionar o item."
-                    )
+            submitted = st.form_submit_button("➕ Adicionar item à simulação")
+
+            if submitted:
+                if not product_ref.strip():
+                    st.error("Informe um código ou nome para o produto (referência interna).")
+                elif selected_idx is None:
+                    st.error("Selecione um NCM final antes de adicionar o item.")
                 else:
-                    descricao_final = descricao_livre.strip() or str(row["Descricao"])
+                    row = matches.loc[selected_idx]
+
+                    # Apenas NCMs de 8 dígitos já foram filtrados
+                    ncm_final = str(row.get("NCM_dotted", "")).strip()
 
                     ii_rate = row.get("II_rate", 0.0)
                     if pd.isna(ii_rate):
@@ -356,8 +415,8 @@ else:
                     cofins_rate = 0.0965  # 9,65%
 
                     new_item = {
-                        "NCM": row["NCM_dotted"],
-                        "Description": descricao_final,
+                        "NCM": ncm_final,
+                        "Description": product_ref.strip(),
                         "Quantity": float(quantidade),
                         "FOB_Unit_USD": float(fob_unit),
                         "II_rate": float(ii_rate),
@@ -372,210 +431,224 @@ else:
                         ignore_index=True,
                     )
 
-                    st.success(f"Item com NCM {row['NCM_dotted']} adicionado à simulação.")
+                    st.success(
+                        f"Item '{product_ref.strip()}' com NCM {ncm_final} adicionado à simulação."
+                    )
 
+    # Itens adicionados – visão em lista (sem cara de Excel)
+    st.markdown("#### Itens adicionados")
 
-# =========================
-# LISTA DE ITENS ADICIONADOS
-# =========================
-st.subheader("Itens adicionados")
-
-if st.session_state["items_df"].empty:
-    st.info("Nenhum item adicionado ainda. Use o formulário acima para incluir produtos.")
-else:
-    st.dataframe(
-        st.session_state["items_df"][["NCM", "Description", "Quantity", "FOB_Unit_USD"]],
-        use_container_width=True,
-    )
-
-    col_r1, col_r2 = st.columns(2)
-    with col_r1:
-        if st.button("🗑️ Remover último item"):
-            st.session_state["items_df"] = st.session_state["items_df"].iloc[:-1, :].copy()
-    with col_r2:
-        if st.button("🧹 Limpar todos os itens"):
-            st.session_state["items_df"] = st.session_state["items_df"].iloc[0:0].copy()
-
-
-# =========================
-# PASSO 3 – RESULTADOS
-# =========================
-st.markdown("---")
-st.markdown("### Passo 3 – Resultados")
-
-if st.button("Calcular custo de importação"):
     items_df = st.session_state["items_df"]
-
     if items_df.empty:
-        st.warning("Adicione pelo menos um item à simulação.")
+        st.info("Nenhum item adicionado ainda.")
     else:
-        clean_df = items_df.copy()
+        # calcular FOB total por item para exibir
+        tmp = items_df.copy()
+        tmp["FOB_Total_USD"] = tmp["FOB_Unit_USD"] * tmp["Quantity"]
+        display_items = tmp[["Description", "NCM", "Quantity", "FOB_Unit_USD", "FOB_Total_USD"]]
 
-        # Garantir tipos numéricos
-        for col in [
-            "Quantity",
-            "FOB_Unit_USD",
-            "II_rate",
-            "IPI_rate",
-            "PIS_rate",
-            "COFINS_rate",
-            "ICMS_rate",
-        ]:
-            if col not in clean_df.columns:
-                clean_df[col] = 0.0
-            clean_df[col] = clean_df[col].fillna(0.0).astype(float)
-
-        # ICMS por item = alíquota interna do estado (por enquanto)
-        clean_df["ICMS_rate"] = float(icms_aliq)
-
-        # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
-        if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
-            afrmm_pct = 0.08
-        else:
-            afrmm_pct = 0.0
-
-        # Seguro: 0,10% ad valorem sobre o FOB total (cálculo feito em calculations.py)
-        insurance_usd = 0.0
-        insurance_pct = 0.001  # 0,1%
-
-        origin_charges_usd = 0.0
-        thc_origin_usd = 0.0
-
-        local_port_costs_brl = 0.0
-        other_local_costs_brl = 0.0
-
-        siscomex_brl = 154.23
-
-        cfg = ShipmentConfig(
-            state_destination=estado_destino,
-            mode=equipamento,
-            fx_rate_usd_brl=cambio,
-            freight_international_usd=frete_usd,
-            insurance_usd=insurance_usd,
-            insurance_pct=insurance_pct,
-            origin_charges_usd=origin_charges_usd,
-            thc_origin_usd=thc_origin_usd,
-            afrmm_pct=afrmm_pct,
-            siscomex_brl=siscomex_brl,
-            local_port_costs_brl=local_port_costs_brl,
-            trucking_brl=transporte_rodoviario_brl,
-            other_local_costs_brl=other_local_costs_brl,
-            regime=regime,
-            purpose=purpose,
-            icms_rate=icms_aliq,
-            da_components=["afrmm", "siscomex"],
-            va_components=["freight", "insurance", "origin_charges", "thc_origin"],
-            allocation_method=allocation_method,
-        )
-
-        per_item, summary = compute_landed_cost(clean_df, cfg)
-
-        # =========================
-        # RESUMO
-        # =========================
-        st.subheader("Resumo")
-
-        # Get values from summary
-        fob_total_brl = summary.get("FOB_total_BRL", 0.0)
-        fob_total_usd = summary.get("FOB_total_USD", 0.0)
-        impostos_totais = summary.get("Tax_paid_total_BRL", 0.0)
-        creditos_totais = summary.get("Tax_credit_total_BRL", 0.0)
-        frete_total_brl = summary.get("Freight_total_BRL", 0.0)
-        custo_final_brl = summary.get("Final_cost_BRL", 0.0)
-
-        # Multiplicador = Custo final (R$) / FOB total (USD)
-        if fob_total_usd > 0:
-            multiplicador = custo_final_brl / fob_total_usd
-        else:
-            multiplicador = 0.0
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("FOB total (R$)", f"{fob_total_brl:,.2f}")
-            st.metric("Frete internacional (R$)", f"{frete_total_brl:,.2f}")
-            st.metric("Impostos (R$)", f"{impostos_totais:,.2f}")
-            st.metric("Créditos de impostos (R$)", f"{creditos_totais:,.2f}")
-        with col2:
-            st.metric("Custo final (R$)", f"{custo_final_brl:,.2f}")
-            st.metric("Multiplicador", f"{multiplicador:,.2f}x")
-
-        # Texto explicando quais impostos geram crédito em cada regime
-        if regime == "simples":
-            credit_text = (
-                "Créditos considerados: **nenhum**. "
-                "Simples Nacional não aproveita créditos de IPI/PIS/COFINS/ICMS nesta simulação."
-            )
-        elif regime == "presumido":
-            credit_text = (
-                "Créditos considerados: **IPI e ICMS** sobre mercadorias para revenda/industrialização. "
-                "PIS e COFINS são tratados como cumulativos, sem crédito (modelo simplificado)."
-            )
-        else:  # lucro real
-            credit_text = (
-                "Créditos considerados: **IPI, PIS, COFINS e ICMS** sobre mercadorias para revenda/industrialização "
-                "(modelo simplificado de regime não cumulativo)."
-            )
-
-        st.caption(credit_text)
-
-        # =========================
-        # RESULTADOS POR ITEM
-        # =========================
-        st.subheader("Resultados por item")
-
-        # Visão simplificada (melhor para mobile)
-        simple_cols = [
-            "NCM",
-            "Description",
-            "Quantity",
-            "Landed_Cost_BRL",
-            "Unit_Cost_BRL",
-        ]
-        simple_df = per_item[simple_cols].rename(
+        display_items = display_items.rename(
             columns={
-                "Description": "Descrição",
-                "Quantity": "Quantidade",
-                "Landed_Cost_BRL": "Custo total por produto (R$)",
-                "Unit_Cost_BRL": "Custo unitário por produto (R$)",
+                "Description": "Produto",
+                "Quantity": "Qtd.",
+                "FOB_Unit_USD": "FOB unit. (USD)",
+                "FOB_Total_USD": "FOB total (USD)",
             }
         )
-        st.dataframe(simple_df, use_container_width=True)
 
-        # Detalhes fiscais completos em um expander (tabela larga)
-        with st.expander("Ver detalhes fiscais por item"):
-            cols_to_show = [
-                "NCM",
-                "Description",
-                "Landed_Cost_BRL",
-                "Unit_Cost_BRL",
+        st.table(display_items)
+
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            if st.button("🗑️ Remover último item"):
+                st.session_state["items_df"] = st.session_state["items_df"].iloc[:-1, :].copy()
+        with col_r2:
+            if st.button("🧹 Limpar todos os itens"):
+                st.session_state["items_df"] = st.session_state["items_df"].iloc[0:0].copy()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# =========================
+# STEP 3 – RESULTS
+# =========================
+with st.container():
+    st.markdown('<div class="step-card">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="step-title">Passo 3</div>'
+        '<div class="section-heading">Resultados</div>'
+        '<div class="section-subtitle">Resumo do embarque e custo por produto.</div>',
+        unsafe_allow_html=True,
+    )
+
+    if st.button("Calcular custo de importação"):
+        items_df = st.session_state["items_df"]
+
+        if items_df.empty:
+            st.warning("Adicione pelo menos um item à simulação.")
+        else:
+            clean_df = items_df.copy()
+
+            # Garantir tipos numéricos
+            for col in [
                 "Quantity",
-                "FOB_Total_BRL",
-                "CIF_BRL",
-                "II_BRL",
-                "IPI_BRL",
-                "PIS_BRL",
-                "COFINS_BRL",
-                "ICMS_BRL",
-                "net_tax_total",
-                "Truck_BRL",
-            ]
+                "FOB_Unit_USD",
+                "II_rate",
+                "IPI_rate",
+                "PIS_rate",
+                "COFINS_rate",
+                "ICMS_rate",
+            ]:
+                if col not in clean_df.columns:
+                    clean_df[col] = 0.0
+                clean_df[col] = clean_df[col].fillna(0.0).astype(float)
 
-            display_df = per_item[cols_to_show].rename(
-                columns={
-                    "Description": "Descrição",
-                    "Landed_Cost_BRL": "Custo total por produto (R$)",
-                    "Unit_Cost_BRL": "Custo unitário por produto (R$)",
-                    "Quantity": "Quantidade",
-                    "FOB_Total_BRL": "FOB total (R$)",
-                    "CIF_BRL": "Valor Aduaneiro / CIF (R$)",
-                    "II_BRL": "II (R$)",
-                    "IPI_BRL": "IPI (R$)",
-                    "PIS_BRL": "PIS-Importação (R$)",
-                    "COFINS_BRL": "COFINS-Importação (R$)",
-                    "ICMS_BRL": "ICMS (R$)",
-                    "net_tax_total": "Impostos líquidos (R$)",
-                    "Truck_BRL": "Transporte rodoviário (R$)",
-                }
+            # ICMS por item = alíquota interna do estado (por enquanto)
+            clean_df["ICMS_rate"] = float(icms_aliq)
+
+            # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
+            if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
+                afrmm_pct = 0.08
+            else:
+                afrmm_pct = 0.0
+
+            # Seguro: 0,10% ad valorem sobre o FOB total (cálculo feito em calculations.py)
+            insurance_usd = 0.0
+            insurance_pct = 0.001  # 0,1%
+
+            origin_charges_usd = 0.0
+            thc_origin_usd = 0.0
+
+            local_port_costs_brl = 0.0
+            other_local_costs_brl = 0.0
+
+            siscomex_brl = 154.23
+
+            cfg = ShipmentConfig(
+                state_destination=estado_destino,
+                mode=equipamento,
+                fx_rate_usd_brl=cambio,
+                freight_international_usd=frete_usd,
+                insurance_usd=insurance_usd,
+                insurance_pct=insurance_pct,
+                origin_charges_usd=origin_charges_usd,
+                thc_origin_usd=thc_origin_usd,
+                afrmm_pct=afrmm_pct,
+                siscomex_brl=siscomex_brl,
+                local_port_costs_brl=local_port_costs_brl,
+                trucking_brl=transporte_rodoviario_brl,
+                other_local_costs_brl=other_local_costs_brl,
+                regime=regime,
+                purpose=purpose,
+                icms_rate=icms_aliq,
+                da_components=["afrmm", "siscomex"],
+                va_components=["freight", "insurance", "origin_charges", "thc_origin"],
+                allocation_method=allocation_method,
             )
 
-            st.dataframe(display_df, use_container_width=True)
+            per_item, summary = compute_landed_cost(clean_df, cfg)
+
+            # ===== Resumo =====
+            st.markdown("#### Resumo do embarque")
+
+            fob_total_brl = summary.get("FOB_total_BRL", 0.0)
+            fob_total_usd = summary.get("FOB_total_USD", 0.0)
+            impostos_totais = summary.get("Tax_paid_total_BRL", 0.0)
+            creditos_totais = summary.get("Tax_credit_total_BRL", 0.0)
+            frete_total_brl = summary.get("Freight_total_BRL", 0.0)
+            custo_final_brl = summary.get("Final_cost_BRL", 0.0)
+
+            # Multiplicador = Custo final (R$) / FOB total (USD)
+            if fob_total_usd > 0:
+                multiplicador = custo_final_brl / fob_total_usd
+            else:
+                multiplicador = 0.0
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("FOB total (R$)", f"{fob_total_brl:,.2f}")
+                st.metric("Frete internacional (R$)", f"{frete_total_brl:,.2f}")
+                st.metric("Impostos (R$)", f"{impostos_totais:,.2f}")
+                st.metric("Créditos de impostos (R$)", f"{creditos_totais:,.2f}")
+            with col2:
+                st.metric("Custo final (R$)", f"{custo_final_brl:,.2f}")
+                st.metric("Multiplicador", f"{multiplicador:,.2f}x")
+
+            # Texto explicando créditos
+            if regime == "simples":
+                credit_text = (
+                    "Créditos considerados: **nenhum**. "
+                    "Simples Nacional não aproveita créditos de IPI/PIS/COFINS/ICMS nesta simulação."
+                )
+            elif regime == "presumido":
+                credit_text = (
+                    "Créditos considerados: **IPI e ICMS** sobre mercadorias para revenda/industrialização. "
+                    "PIS e COFINS são tratados como cumulativos, sem crédito (modelo simplificado)."
+                )
+            else:  # lucro real
+                credit_text = (
+                    "Créditos considerados: **IPI, PIS, COFINS e ICMS** sobre mercadorias para revenda/industrialização "
+                    "(modelo simplificado de regime não cumulativo)."
+                )
+
+            st.markdown(f"<div class='small-muted'>{credit_text}</div>", unsafe_allow_html=True)
+
+            # ===== Resultados por item =====
+            st.markdown("#### Custo por produto")
+
+            simple_cols = [
+                "Description",
+                "NCM",
+                "Quantity",
+                "Landed_Cost_BRL",
+                "Unit_Cost_BRL",
+            ]
+            simple_df = per_item[simple_cols].rename(
+                columns={
+                    "Description": "Produto",
+                    "Quantity": "Qtd.",
+                    "Landed_Cost_BRL": "Custo total por produto (R$)",
+                    "Unit_Cost_BRL": "Custo unitário por produto (R$)",
+                }
+            )
+            st.table(simple_df)
+
+            with st.expander("Ver detalhes fiscais por item"):
+                cols_to_show = [
+                    "Description",
+                    "NCM",
+                    "Quantity",
+                    "FOB_Total_BRL",
+                    "CIF_BRL",
+                    "II_BRL",
+                    "IPI_BRL",
+                    "PIS_BRL",
+                    "COFINS_BRL",
+                    "ICMS_BRL",
+                    "net_tax_total",
+                    "Landed_Cost_BRL",
+                    "Unit_Cost_BRL",
+                    "Truck_BRL",
+                ]
+
+                display_df = per_item[cols_to_show].rename(
+                    columns={
+                        "Description": "Produto",
+                        "Quantity": "Qtd.",
+                        "FOB_Total_BRL": "FOB total (R$)",
+                        "CIF_BRL": "Valor Aduaneiro / CIF (R$)",
+                        "II_BRL": "II (R$)",
+                        "IPI_BRL": "IPI (R$)",
+                        "PIS_BRL": "PIS-Importação (R$)",
+                        "COFINS_BRL": "COFINS-Importação (R$)",
+                        "ICMS_BRL": "ICMS (R$)",
+                        "net_tax_total": "Impostos líquidos (R$)",
+                        "Landed_Cost_BRL": "Custo total por produto (R$)",
+                        "Unit_Cost_BRL": "Custo unitário por produto (R$)",
+                        "Truck_BRL": "Transporte rodoviário (R$)",
+                    }
+                )
+
+                st.dataframe(display_df, use_container_width=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
