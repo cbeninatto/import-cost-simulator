@@ -14,10 +14,56 @@ st.set_page_config(
     layout="wide",
 )
 
+# =========================
+# Minimalist styling
+# =========================
+st.markdown(
+    """
+    <style>
+        /* Centraliza e estreita o conteúdo para ficar melhor no desktop e mobile */
+        .block-container {
+            max-width: 960px;
+            padding-top: 1rem;
+            padding-bottom: 2rem;
+        }
+
+        /* Fundo bem claro */
+        body {
+            background-color: #f6f7fb;
+        }
+
+        /* Títulos mais discretos */
+        h1 {
+            font-size: 1.7rem !important;
+            margin-bottom: 0.4rem !important;
+        }
+        h3 {
+            font-size: 1.15rem !important;
+            margin-top: 1.2rem !important;
+            margin-bottom: 0.4rem !important;
+        }
+
+        /* Inputs com fonte um pouco menor */
+        .stTextInput > div > div > input,
+        .stNumberInput > div > div > input,
+        .stSelectbox > div > div > div {
+            font-size: 0.9rem;
+        }
+
+        /* Métricas mais compactas */
+        .stMetric {
+            padding-top: 0 !important;
+            padding-bottom: 0.1rem !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("📦 Simulador de Custo de Importação")
 
 st.markdown(
-    "Simule o **custo Brasil** de uma importação com vários produtos no mesmo embarque, "
+    "Simule o **custo Brasil** de um embarque com vários produtos, "
     "incluindo impostos, frete internacional e transporte rodoviário."
 )
 
@@ -67,7 +113,7 @@ def normalize_ncm_search(value: str):
 
 
 # =========================
-# PASSO 1 – CONFIGURAÇÕES DO EMBARQUE (SEM SIDEBAR)
+# PASSO 1 – CONFIGURAÇÕES DO EMBARQUE
 # =========================
 st.markdown("### Passo 1 – Configurações do embarque")
 
@@ -125,7 +171,7 @@ with config_col1:
     )
 
 with config_col2:
-    st.markdown("#### Custos principais")
+    st.markdown("##### Custos principais")
 
     frete_usd = st.number_input(
         "Frete internacional (USD)",
@@ -141,7 +187,7 @@ with config_col2:
         step=50.0,
     )
 
-    st.markdown("#### Regime e uso")
+    st.markdown("##### Regime e uso")
 
     regime_label = st.selectbox(
         "Regime tributário da empresa",
@@ -160,31 +206,30 @@ with config_col2:
         "Uso das mercadorias",
         ["Indústria", "Revenda"],
         index=1,
-        help="Ambas as opções são tratadas como mercadorias para revenda/industrialização em termos de créditos.",
+        help="Tratado como mercadorias para revenda/industrialização para fins de crédito.",
     )
 
     # Internamente, tratamos ambos como 'resale'
     purpose = "resale"
 
-    st.markdown("#### Incoterm")
+    st.markdown("##### Incoterm")
 
     incoterm = st.selectbox(
         "Incoterm",
         ["EXW", "FOB", "CIF"],
         index=0,
         help=(
-            "Por enquanto, o Incoterm é usado apenas como informação na simulação. "
-            "Os custos compartilhados (frete, seguro etc.) são alocados entre os itens "
-            "proporcionalmente ao valor FOB."
+            "Por enquanto, o Incoterm é apenas informativo. "
+            "Custos compartilhados são alocados proporcionalmente ao FOB."
         ),
     )
 
     allocation_method = "FOB"
 
 st.caption(
-    "Por padrão, o seguro internacional é calculado como **0,10% ad valorem** "
-    "sobre o valor FOB total. AFRMM (8% sobre o frete marítimo) e Taxa Siscomex "
-    "(R$ 154,23) são incluídos automaticamente na base do ICMS para embarques marítimos."
+    "Seguro padrão: **0,10% ad valorem** sobre o FOB total (se não informado). "
+    "AFRMM (8% sobre o frete) e Taxa Siscomex (R$ 154,23) são incluídos "
+    "automaticamente na base do ICMS para embarques marítimos."
 )
 
 
@@ -193,7 +238,7 @@ st.caption(
 # =========================
 st.markdown("### Passo 2 – Itens da simulação")
 
-st.subheader("Adicionar item à simulação")
+st.subheader("Adicionar item")
 
 if NCM_TABLE is None:
     st.error(
@@ -213,14 +258,14 @@ else:
         col_a, col_b = st.columns(2)
         with col_a:
             descricao_livre = st.text_input(
-                "Descrição do produto (livre)",
-                help="Texto livre para identificar o produto (ex.: 'corrediça telescópica 450mm zincada').",
+                "Descrição do produto",
+                help="Ex.: 'corrediça telescópica 450mm zincada'.",
             )
 
         with col_b:
             ncm_input = st.text_input(
                 "NCM (0000.00.00 ou 00000000)",
-                help="Você pode digitar o NCM completo ou parcial; o sistema sugerirá opções.",
+                help="Digite o NCM completo ou parcial; o sistema sugerirá opções.",
             )
 
         col_c, col_d = st.columns(2)
@@ -240,7 +285,7 @@ else:
                 format="%.4f",
             )
 
-        st.markdown("### Sugestões de NCM")
+        st.markdown("##### Sugestões de NCM")
 
         matches = pd.DataFrame()
 
@@ -261,7 +306,6 @@ else:
                 matches = df_search[mask].copy()
 
         if not matches.empty:
-            # sort by level (4-digit -> 5-digit -> 6-digit -> 8-digit) and code
             sort_cols = ["NCM_dotted"]
             if "digits_len" in matches.columns:
                 sort_cols = ["digits_len", "NCM_dotted"]
@@ -447,31 +491,13 @@ if st.button("Calcular custo de importação"):
 
         col1, col2 = st.columns(2)
         with col1:
-            st.metric(
-                "FOB total (R$)",
-                f"{fob_total_brl:,.2f}",
-            )
-            st.metric(
-                "Frete internacional (R$)",
-                f"{frete_total_brl:,.2f}",
-            )
-            st.metric(
-                "Impostos (R$)",
-                f"{impostos_totais:,.2f}",
-            )
-            st.metric(
-                "Créditos de impostos (R$)",
-                f"{creditos_totais:,.2f}",
-            )
+            st.metric("FOB total (R$)", f"{fob_total_brl:,.2f}")
+            st.metric("Frete internacional (R$)", f"{frete_total_brl:,.2f}")
+            st.metric("Impostos (R$)", f"{impostos_totais:,.2f}")
+            st.metric("Créditos de impostos (R$)", f"{creditos_totais:,.2f}")
         with col2:
-            st.metric(
-                "Custo final (R$)",
-                f"{custo_final_brl:,.2f}",
-            )
-            st.metric(
-                "Multiplicador",
-                f"{multiplicador:,.2f}x",
-            )
+            st.metric("Custo final (R$)", f"{custo_final_brl:,.2f}")
+            st.metric("Multiplicador", f"{multiplicador:,.2f}x")
 
         # Texto explicando quais impostos geram crédito em cada regime
         if regime == "simples":
@@ -497,39 +523,59 @@ if st.button("Calcular custo de importação"):
         # =========================
         st.subheader("Resultados por item")
 
-        cols_to_show = [
+        # Visão simplificada (melhor para mobile)
+        simple_cols = [
             "NCM",
             "Description",
+            "Quantity",
             "Landed_Cost_BRL",
             "Unit_Cost_BRL",
-            "Quantity",
-            "FOB_Total_BRL",
-            "CIF_BRL",
-            "II_BRL",
-            "IPI_BRL",
-            "PIS_BRL",
-            "COFINS_BRL",
-            "ICMS_BRL",
-            "net_tax_total",
-            "Truck_BRL",
         ]
-
-        display_df = per_item[cols_to_show].rename(
+        simple_df = per_item[simple_cols].rename(
             columns={
                 "Description": "Descrição",
+                "Quantity": "Quantidade",
                 "Landed_Cost_BRL": "Custo total por produto (R$)",
                 "Unit_Cost_BRL": "Custo unitário por produto (R$)",
-                "Quantity": "Quantidade",
-                "FOB_Total_BRL": "FOB total (R$)",
-                "CIF_BRL": "Valor Aduaneiro / CIF (R$)",
-                "II_BRL": "II (R$)",
-                "IPI_BRL": "IPI (R$)",
-                "PIS_BRL": "PIS-Importação (R$)",
-                "COFINS_BRL": "COFINS-Importação (R$)",
-                "ICMS_BRL": "ICMS (R$)",
-                "net_tax_total": "Impostos líquidos (R$)",
-                "Truck_BRL": "Transporte rodoviário (R$)",
             }
         )
+        st.dataframe(simple_df, use_container_width=True)
 
-        st.dataframe(display_df, use_container_width=True)
+        # Detalhes fiscais completos em um expander (tabela larga)
+        with st.expander("Ver detalhes fiscais por item"):
+            cols_to_show = [
+                "NCM",
+                "Description",
+                "Landed_Cost_BRL",
+                "Unit_Cost_BRL",
+                "Quantity",
+                "FOB_Total_BRL",
+                "CIF_BRL",
+                "II_BRL",
+                "IPI_BRL",
+                "PIS_BRL",
+                "COFINS_BRL",
+                "ICMS_BRL",
+                "net_tax_total",
+                "Truck_BRL",
+            ]
+
+            display_df = per_item[cols_to_show].rename(
+                columns={
+                    "Description": "Descrição",
+                    "Landed_Cost_BRL": "Custo total por produto (R$)",
+                    "Unit_Cost_BRL": "Custo unitário por produto (R$)",
+                    "Quantity": "Quantidade",
+                    "FOB_Total_BRL": "FOB total (R$)",
+                    "CIF_BRL": "Valor Aduaneiro / CIF (R$)",
+                    "II_BRL": "II (R$)",
+                    "IPI_BRL": "IPI (R$)",
+                    "PIS_BRL": "PIS-Importação (R$)",
+                    "COFINS_BRL": "COFINS-Importação (R$)",
+                    "ICMS_BRL": "ICMS (R$)",
+                    "net_tax_total": "Impostos líquidos (R$)",
+                    "Truck_BRL": "Transporte rodoviário (R$)",
+                }
+            )
+
+            st.dataframe(display_df, use_container_width=True)
