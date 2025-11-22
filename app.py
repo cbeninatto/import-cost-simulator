@@ -418,51 +418,7 @@ if st.button("Calcular custo de importação"):
             allocation_method=allocation_method,
         )
 
-        per_item, summary = compute_landed_cost(clean_df, cfg)
-
-        # =========================
-        # RESULTADOS POR ITEM
-        # =========================
-        st.subheader("Resultados por item")
-
-        cols_to_show = [
-            "NCM",
-            "Description",
-            "Quantity",
-            "FOB_Total_BRL",
-            "CIF_BRL",
-            "II_BRL",
-            "IPI_BRL",
-            "PIS_BRL",
-            "COFINS_BRL",
-            "ICMS_BRL",
-            "net_tax_total",
-            "Local_Non_DA_BRL",
-            "Truck_BRL",
-            "Landed_Cost_BRL",
-            "Unit_Cost_BRL",
-        ]
-
-        display_df = per_item[cols_to_show].rename(
-            columns={
-                "Description": "Descrição",
-                "Quantity": "Quantidade",
-                "FOB_Total_BRL": "FOB total (R$)",
-                "CIF_BRL": "Valor Aduaneiro / CIF (R$)",
-                "II_BRL": "II (R$)",
-                "IPI_BRL": "IPI (R$)",
-                "PIS_BRL": "PIS-Importação (R$)",
-                "COFINS_BRL": "COFINS-Importação (R$)",
-                "ICMS_BRL": "ICMS (R$)",
-                "net_tax_total": "Impostos líquidos (R$)",
-                "Local_Non_DA_BRL": "Custos locais (R$)",
-                "Truck_BRL": "Transporte rodoviário (R$)",
-                "Landed_Cost_BRL": "Custo total por item (R$)",
-                "Unit_Cost_BRL": "Custo unitário (R$)",
-            }
-        )
-
-        st.dataframe(display_df, use_container_width=True)
+       per_item, summary = compute_landed_cost(clean_df, cfg)
 
         # =========================
         # RESUMO
@@ -471,17 +427,30 @@ if st.button("Calcular custo de importação"):
 
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("FOB total (R$)", f"{summary['FOB_total_BRL']:,.2f}")
-            st.metric("Impostos (R$)", f"{summary['Tax_paid_total_BRL']:,.2f}")
-            st.metric("Créditos de impostos (R$)", f"{summary['Tax_credit_total_BRL']:,.2f}")
             st.metric(
-                "Fator FOB → Custo Brasil",
-                f"{summary['FOB_to_Brazil_factor']:,.2f}x",
+                "FOB total (R$)",
+                f"{summary.get('FOB_total_BRL', 0):,.2f}",
+            )
+            st.metric(
+                "Frete internacional (R$)",
+                f"{summary.get('Freight_total_BRL', 0):,.2f}",
+            )
+            st.metric(
+                "Custo de nacionalização (R$)",
+                f"{summary.get('Tax_paid_total_BRL', 0):,.2f}",
+            )
+            st.metric(
+                "Créditos de impostos (R$)",
+                f"{summary.get('Tax_credit_total_BRL', 0):,.2f}",
             )
         with col2:
             st.metric(
-                "Custo unitário (R$)",
-                f"{summary['Avg_unit_cost_BRL']:,.2f}",
+                "Custo final (R$)",
+                f"{summary.get('Final_cost_BRL', 0):,.2f}",
+            )
+            st.metric(
+                "Multiplicador",
+                f"{summary.get('FOB_to_Brazil_multiplier', 0):,.2f}x",
             )
 
         # Texto explicando quais impostos geram crédito em cada regime
@@ -502,3 +471,45 @@ if st.button("Calcular custo de importação"):
             )
 
         st.caption(credit_text)
+
+        # =========================
+        # RESULTADOS POR ITEM
+        # =========================
+        st.subheader("Resultados por item")
+
+        cols_to_show = [
+            "NCM",
+            "Description",
+            "Landed_Cost_BRL",
+            "Unit_Cost_BRL",
+            "Quantity",
+            "FOB_Total_BRL",
+            "CIF_BRL",
+            "II_BRL",
+            "IPI_BRL",
+            "PIS_BRL",
+            "COFINS_BRL",
+            "ICMS_BRL",
+            "net_tax_total",
+            "Truck_BRL",
+        ]
+
+        display_df = per_item[cols_to_show].rename(
+            columns={
+                "Description": "Descrição",
+                "Landed_Cost_BRL": "Custo total por produto (R$)",
+                "Unit_Cost_BRL": "Custo unitário por produto (R$)",
+                "Quantity": "Quantidade",
+                "FOB_Total_BRL": "FOB total (R$)",
+                "CIF_BRL": "Valor Aduaneiro / CIF (R$)",
+                "II_BRL": "II (R$)",
+                "IPI_BRL": "IPI (R$)",
+                "PIS_BRL": "PIS-Importação (R$)",
+                "COFINS_BRL": "COFINS-Importação (R$)",
+                "ICMS_BRL": "ICMS (R$)",
+                "net_tax_total": "Impostos líquidos (R$)",
+                "Truck_BRL": "Transporte rodoviário (R$)",
+            }
+        )
+
+        st.dataframe(display_df, use_container_width=True)
