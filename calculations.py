@@ -1,6 +1,5 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
-
+from dataclasses import dataclass
+from typing import List, Dict, Tuple
 import pandas as pd
 
 
@@ -9,7 +8,6 @@ class ShipmentConfig:
     state_destination: str
     mode: str
     fx_rate_usd_brl: float
-
     freight_international_usd: float
     insurance_usd: float
     insurance_pct: float
@@ -17,197 +15,113 @@ class ShipmentConfig:
     thc_origin_usd: float
     afrmm_pct: float
     siscomex_brl: float
-
     local_port_costs_brl: float
     trucking_brl: float
     other_local_costs_brl: float
-
-    regime: str      # 'simples', 'presumido', 'real'
-    purpose: str     # 'resale', 'consumption'
-
+    regime: str          # 'simples', 'presumido', 'real'
+    purpose: str         # 'resale' (mercadorias) or 'asset'
     icms_rate: float
-
-    da_components: List[str] = field(default_factory=lambda: ["afrmm", "siscomex"])
-    va_components: List[str] = field(default_factory=lambda: ["freight", "insurance", "origin_charges", "thc_origin"])
-    allocation_method: str = "FOB"
-
-
-def compute_tax_credits(
-    regime: str,
-    purpose: str,
-    taxes: Dict[str, float],
-    options: Optional[Dict[str, bool]] = None
-) -> Dict[str, float]:
-    II = taxes.get("II", 0.0)
-    IPI = taxes.get("IPI", 0.0)
-    PIS = taxes.get("PIS", 0.0)
-    COFINS = taxes.get("COFINS", 0.0)
-    ICMS = taxes.get("ICMS", 0.0)
-
-    # default options
-    opts = {
-        "ipi_credit_enabled": False,
-        "pis_cofins_credit_enabled": False,
-        "icms_credit_enabled": False,
-    }
-    if options:
-        opts.update(options)
-
-    credit_II = 0.0
-
-    # default flags
-    ipi_enabled = False
-    pis_cofins_enabled = False
-    icms_enabled = False
-
-    if regime == "simples":
-        # no credits by default
-        ipi_enabled = False
-        pis_cofins_enabled = False
-        icms_enabled = False
-
-    elif regime == "presumido":
-        if purpose == "resale":
-            ipi_enabled = opts.get("ipi_credit_enabled", False)
-            pis_cofins_enabled = False
-            icms_enabled = True
-        else:
-            ipi_enabled = False
-            pis_cofins_enabled = False
-            icms_enabled = False
-
-    elif regime == "real":
-        if purpose == "resale":
-            ipi_enabled = opts.get("ipi_credit_enabled", True)
-            pis_cofins_enabled = opts.get("pis_cofins_credit_enabled", True)
-            icms_enabled = opts.get("icms_credit_enabled", True)
-        else:
-            ipi_enabled = False
-            pis_cofins_enabled = False
-            icms_enabled = False
-
-    credit_IPI = IPI if (ipi_enabled and purpose == "resale") else 0.0
-    credit_PIS = PIS if (pis_cofins_enabled and purpose == "resale") else 0.0
-    credit_COFINS = COFINS if (pis_cofins_enabled and purpose == "resale") else 0.0
-    credit_ICMS = ICMS if (icms_enabled and purpose == "resale") else 0.0
-
-    net_II = II - credit_II
-    net_IPI = IPI - credit_IPI
-    net_PIS = PIS - credit_PIS
-    net_COFINS = COFINS - credit_COFINS
-    net_ICMS = ICMS - credit_ICMS
-
-    return {
-        "credit_II": credit_II,
-        "credit_IPI": credit_IPI,
-        "credit_PIS": credit_PIS,
-        "credit_COFINS": credit_COFINS,
-        "credit_ICMS": credit_ICMS,
-        "net_II": net_II,
-        "net_IPI": net_IPI,
-        "net_PIS": net_PIS,
-        "net_COFINS": net_COFINS,
-        "net_ICMS": net_ICMS,
-        "net_tax_total": net_II + net_IPI + net_PIS + net_COFINS + net_ICMS,
-    }
+    da_components: List[str]
+    va_components: List[str]
+    allocation_method: str  # currently only 'FOB'
 
 
-def _compute_shares(df: pd.DataFrame, method: str) -> pd.Series:
-    if method == "WEIGHT" and "Gross_Weight_kg" in df.columns:
-        base = df["Gross_Weight_kg"].fillna(0.0)
-        if base.sum() == 0:
-            base = df["FOB_Total_BRL"]
-    elif method == "CIF" and "CIF_BRL" in df.columns:
-        base = df["CIF_BRL"]
-    else:  # default FOB
-        base = df["FOB_Total_BRL"]
-    total = base.sum()
-    if total == 0:
-        return pd.Series([0.0] * len(df), index=df.index)
-    return base / total
+def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd.DataFrame, Dict[str, float]]:
+    """Compute import taxes, credits and landed cost per item + summary.
 
-
-def compute_landed_cost(
-    items_df: pd.DataFrame,
-    cfg: ShipmentConfig,
-    tax_options: Optional[Dict[str, bool]] = None
-) -> Tuple[pd.DataFrame, Dict[str, float]]:
-    """
-    items_df expected columns:
+    items_df is expected to have columns:
       - NCM
       - Description
       - Quantity
       - FOB_Unit_USD
-      - (optional) Gross_Weight_kg
-      - (optional) II_rate, IPI_rate, PIS_rate, COFINS_rate, ICMS_rate
+      - II_rate
+      - IPI_rate
+      - PIS_rate
+      - COFINS_rate
+      - ICMS_rate (ignored; cfg.icms_rate is used)
     """
-    df = items_df.copy()
+    df = items_df.copy().reset_index(drop=True)
 
-    # Basic FOB totals
-    df["Quantity"] = df["Quantity"].astype(float)
-    df["FOB_Unit_USD"] = df["FOB_Unit_USD"].astype(float)
+    # Ensure numeric columns
+    num_cols = [
+        "Quantity",
+        "FOB_Unit_USD",
+        "II_rate",
+        "IPI_rate",
+        "PIS_rate",
+        "COFINS_rate",
+        "ICMS_rate",
+    ]
+    for c in num_cols:
+        if c not in df.columns:
+            df[c] = 0.0
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+
+    # Basic FOB values
     df["FOB_Total_USD"] = df["FOB_Unit_USD"] * df["Quantity"]
     df["FOB_Total_BRL"] = df["FOB_Total_USD"] * cfg.fx_rate_usd_brl
 
-    # Shared costs in BRL
+    total_fob_brl = df["FOB_Total_BRL"].sum()
+    if total_fob_brl > 0:
+        df["share"] = df["FOB_Total_BRL"] / total_fob_brl
+    else:
+        df["share"] = 1.0 / max(len(df), 1)
+
+    # Shared costs (total, in BRL)
     freight_brl = cfg.freight_international_usd * cfg.fx_rate_usd_brl
 
-    # insurance: if 0 and pct > 0, compute on FOB total USD
-    insurance_usd = cfg.insurance_usd
-    if insurance_usd == 0 and cfg.insurance_pct > 0:
-        insurance_usd = cfg.insurance_pct * df["FOB_Total_USD"].sum()
-    insurance_brl = insurance_usd * cfg.fx_rate_usd_brl
+    if cfg.insurance_usd and cfg.insurance_usd > 0:
+        insurance_brl = cfg.insurance_usd * cfg.fx_rate_usd_brl
+    else:
+        insurance_brl = cfg.insurance_pct * total_fob_brl
 
     origin_brl = cfg.origin_charges_usd * cfg.fx_rate_usd_brl
-    thc_origin_brl = cfg.thc_origin_usd * cfg.fx_rate_usd_brl
+    thc_brl = cfg.thc_origin_usd * cfg.fx_rate_usd_brl
 
-    afrmm_brl = 0.0
-    if cfg.mode.lower().startswith("fcl") or cfg.mode.lower() == "lcl":
-        afrmm_brl = cfg.afrmm_pct * freight_brl
-
-    # CIF / Valor Aduaneiro
-    df["CIF_BRL"] = df["FOB_Total_BRL"]
-    shares_for_va = _compute_shares(df, cfg.allocation_method)
-
-    def alloc(component_total: float) -> pd.Series:
-        return shares_for_va * component_total
-
-    if "freight" in cfg.va_components:
-        df["CIF_BRL"] += alloc(freight_brl)
-    if "insurance" in cfg.va_components:
-        df["CIF_BRL"] += alloc(insurance_brl)
-    if "origin_charges" in cfg.va_components:
-        df["CIF_BRL"] += alloc(origin_brl)
-    if "thc_origin" in cfg.va_components:
-        df["CIF_BRL"] += alloc(thc_origin_brl)
-
-    # Despesas aduaneiras (DA) for ICMS base
+    afrmm_brl = cfg.afrmm_pct * freight_brl
     siscomex_brl = cfg.siscomex_brl
-    da_total = 0.0
-    if "afrmm" in cfg.da_components:
-        da_total += afrmm_brl
-    if "siscomex" in cfg.da_components:
-        da_total += siscomex_brl
 
-    df["FOB_Total_BRL"] = df["FOB_Total_BRL"].fillna(0.0)
-    shares_for_da = _compute_shares(df, cfg.allocation_method)
-    df["DA_BRL"] = shares_for_da * da_total
+    local_port_brl = cfg.local_port_costs_brl
+    trucking_brl = cfg.trucking_brl
+    other_local_brl = cfg.other_local_costs_brl
 
-    # Tax rates (if missing, default to 0 for now; user can fill them in the UI)
-    for col in ["II_rate", "IPI_rate", "PIS_rate", "COFINS_rate", "ICMS_rate"]:
-        if col not in df.columns:
-            df[col] = 0.0
-        df[col] = df[col].fillna(0.0).astype(float)
+    # Allocate shared costs by FOB share
+    df["Freight_BRL"] = freight_brl * df["share"]
+    df["Insurance_BRL"] = insurance_brl * df["share"]
+    df["Origin_BRL"] = origin_brl * df["share"]
+    df["THC_BRL"] = thc_brl * df["share"]
 
-    # Compute taxes per item
+    df["AFRMM_BRL"] = afrmm_brl * df["share"]
+    df["Siscomex_BRL"] = siscomex_brl * df["share"]
+
+    df["Local_Port_BRL"] = local_port_brl * df["share"]
+    df["Other_Local_BRL"] = other_local_brl * df["share"]
+    df["Truck_BRL"] = trucking_brl * df["share"]
+
+    # CIF / Valor Aduaneiro (simplified)
+    df["CIF_BRL"] = (
+        df["FOB_Total_BRL"]
+        + df["Freight_BRL"]
+        + df["Insurance_BRL"]
+        + df["Origin_BRL"]
+        + df["THC_BRL"]
+    )
+
+    # Import taxes
     df["II_BRL"] = df["CIF_BRL"] * df["II_rate"]
-    df["IPI_Base_BRL"] = df["CIF_BRL"] + df["II_BRL"]
-    df["IPI_BRL"] = df["IPI_Base_BRL"] * df["IPI_rate"]
     df["PIS_BRL"] = df["CIF_BRL"] * df["PIS_rate"]
     df["COFINS_BRL"] = df["CIF_BRL"] * df["COFINS_rate"]
 
-    # ICMS per item (por dentro)
-    df["S_for_ICMS"] = (
+    # IPI base: CIF + II  (simplified, ignoring IOF)
+    df["IPI_base_BRL"] = df["CIF_BRL"] + df["II_BRL"]
+    df["IPI_BRL"] = df["IPI_base_BRL"] * df["IPI_rate"]
+
+    # Despesas aduaneiras (DA) relevantes para ICMS: AFRMM + Siscomex
+    df["DA_BRL"] = df["AFRMM_BRL"] + df["Siscomex_BRL"]
+
+    # ICMS: base = (CIF + II + IPI + PIS + COFINS + DA) / (1 - ICMS)
+    icms_rate = cfg.icms_rate
+    base_icms_numerator = (
         df["CIF_BRL"]
         + df["II_BRL"]
         + df["IPI_BRL"]
@@ -215,50 +129,18 @@ def compute_landed_cost(
         + df["COFINS_BRL"]
         + df["DA_BRL"]
     )
+    if icms_rate >= 1.0:
+        df["ICMS_base_BRL"] = base_icms_numerator
+        df["ICMS_BRL"] = 0.0
+    else:
+        df["ICMS_base_BRL"] = base_icms_numerator / (1.0 - icms_rate)
+        df["ICMS_BRL"] = df["ICMS_base_BRL"] - base_icms_numerator
 
-    # effective ICMS rate: item-specific or global
-    df["ICMS_rate_effective"] = df["ICMS_rate"]
-    df.loc[df["ICMS_rate_effective"] == 0.0, "ICMS_rate_effective"] = cfg.icms_rate
+    # Local costs not in DA
+    df["Local_Non_DA_BRL"] = df["Local_Port_BRL"] + df["Other_Local_BRL"]
 
-    def calc_icms(row):
-        rate = row["ICMS_rate_effective"]
-        if rate <= 0 or rate >= 1:
-            return 0.0
-        return row["S_for_ICMS"] * rate / (1.0 - rate)
-
-    df["ICMS_BRL"] = df.apply(calc_icms, axis=1)
-
-    # Tax credits & net tax cost
-    credits = {
-        "credit_II": [],
-        "credit_IPI": [],
-        "credit_PIS": [],
-        "credit_COFINS": [],
-        "credit_ICMS": [],
-        "net_II": [],
-        "net_IPI": [],
-        "net_PIS": [],
-        "net_COFINS": [],
-        "net_ICMS": [],
-        "net_tax_total": [],
-    }
-
-    for _, row in df.iterrows():
-        taxes = {
-            "II": row["II_BRL"],
-            "IPI": row["IPI_BRL"],
-            "PIS": row["PIS_BRL"],
-            "COFINS": row["COFINS_BRL"],
-            "ICMS": row["ICMS_BRL"],
-        }
-        result = compute_tax_credits(cfg.regime, cfg.purpose, taxes, tax_options)
-        for k in credits.keys():
-            credits[k].append(result[k])
-
-    for k, vals in credits.items():
-        df[k] = vals
-
-    df["Tax_Paid_Total_BRL"] = (
+    # Gross tax burden (paid)
+    df["Tax_paid_BRL"] = (
         df["II_BRL"]
         + df["IPI_BRL"]
         + df["PIS_BRL"]
@@ -266,41 +148,105 @@ def compute_landed_cost(
         + df["ICMS_BRL"]
     )
 
-    df["Local_Non_DA_BRL"] = alloc(cfg.local_port_costs_brl + cfg.other_local_costs_brl)
-    df["Truck_BRL"] = alloc(cfg.trucking_brl)
+    # =========================
+    # Tax credits by regime (simplified model)
+    # =========================
+    # purpose 'resale' = mercadorias para revenda/industrialização
+    eligible_for_credits = cfg.purpose == "resale"
 
+    ipi_credit = pd.Series(0.0, index=df.index)
+    pis_credit = pd.Series(0.0, index=df.index)
+    cofins_credit = pd.Series(0.0, index=df.index)
+    icms_credit = pd.Series(0.0, index=df.index)
+
+    regime = cfg.regime.lower()
+
+    if regime == "simples":
+        # No credits in this simplified model
+        pass
+
+    elif regime == "presumido":
+        if eligible_for_credits:
+            # Simplified: credit IPI and ICMS on mercadorias
+            ipi_credit = df["IPI_BRL"]
+            icms_credit = df["ICMS_BRL"]
+
+    elif regime == "real":
+        if eligible_for_credits:
+            # Simplified non-cumulative model:
+            # credit IPI, PIS, COFINS and ICMS on mercadorias
+            ipi_credit = df["IPI_BRL"]
+            pis_credit = df["PIS_BRL"]
+            cofins_credit = df["COFINS_BRL"]
+            icms_credit = df["ICMS_BRL"]
+
+    df["IPI_credit_BRL"] = ipi_credit
+    df["PIS_credit_BRL"] = pis_credit
+    df["COFINS_credit_BRL"] = cofins_credit
+    df["ICMS_credit_BRL"] = icms_credit
+
+    df["Tax_credit_BRL"] = (
+        df["IPI_credit_BRL"]
+        + df["PIS_credit_BRL"]
+        + df["COFINS_credit_BRL"]
+        + df["ICMS_credit_BRL"]
+    )
+
+    df["net_tax_total"] = df["Tax_paid_BRL"] - df["Tax_credit_BRL"]
+
+    # Landed cost per item
     df["Landed_Cost_BRL"] = (
         df["CIF_BRL"]
-        + df["net_tax_total"]
+        + df["II_BRL"]
+        + df["IPI_BRL"]
+        + df["PIS_BRL"]
+        + df["COFINS_BRL"]
+        + df["ICMS_BRL"]
+        + df["DA_BRL"]
         + df["Local_Non_DA_BRL"]
         + df["Truck_BRL"]
     )
 
-    df["Unit_Cost_BRL"] = df["Landed_Cost_BRL"] / df["Quantity"]
+    df["Unit_Cost_BRL"] = df["Landed_Cost_BRL"] / df["Quantity"].replace(0, pd.NA)
+    df["Unit_Cost_BRL"] = df["Unit_Cost_BRL"].fillna(0.0)
 
-    # Shipment summary
+    # =========================
+    # Summary
+    # =========================
+    FOB_total_BRL = df["FOB_Total_BRL"].sum()
+    VA_total_BRL = df["CIF_BRL"].sum()
+    Tax_paid_total_BRL = df["Tax_paid_BRL"].sum()
+    Tax_credit_total_BRL = df["Tax_credit_BRL"].sum()
+    Net_tax_total_BRL = df["net_tax_total"].sum()
+    Landed_total_BRL = df["Landed_Cost_BRL"].sum()
+    Truck_total_BRL = df["Truck_BRL"].sum()
+    total_qty = df["Quantity"].sum()
+
+    if FOB_total_BRL > 0:
+        FOB_to_Brazil_factor = Landed_total_BRL / FOB_total_BRL
+    else:
+        FOB_to_Brazil_factor = 0.0
+
+    if total_qty > 0:
+        Avg_unit_cost_BRL = Landed_total_BRL / total_qty
+    else:
+        Avg_unit_cost_BRL = 0.0
+
     summary = {
-        "FOB_total_BRL": df["FOB_Total_BRL"].sum(),
-        "VA_total_BRL": df["CIF_BRL"].sum(),
-        "Tax_paid_total_BRL": df["Tax_Paid_Total_BRL"].sum(),
-        "Tax_credit_total_BRL": (
-            df["credit_IPI"].sum()
-            + df["credit_PIS"].sum()
-            + df["credit_COFINS"].sum()
-            + df["credit_ICMS"].sum()
-        ),
-        "Net_tax_total_BRL": df["net_tax_total"].sum(),
-        "Local_non_DA_total_BRL": df["Local_Non_DA_BRL"].sum(),
-        "Truck_total_BRL": df["Truck_BRL"].sum(),
-        "Landed_total_BRL": df["Landed_Cost_BRL"].sum(),
+        "FOB_total_BRL": float(FOB_total_BRL),
+        "VA_total_BRL": float(VA_total_BRL),
+        "Tax_paid_total_BRL": float(Tax_paid_total_BRL),
+        "Tax_credit_total_BRL": float(Tax_credit_total_BRL),
+        "Net_tax_total_BRL": float(Net_tax_total_BRL),
+        "Landed_total_BRL": float(Landed_total_BRL),
+        "Truck_total_BRL": float(Truck_total_BRL),
+        "FOB_to_Brazil_factor": float(FOB_to_Brazil_factor),
+        "Avg_unit_cost_BRL": float(Avg_unit_cost_BRL),
+        # Breakdown of credits by tax (useful for UI if needed)
+        "IPI_credit_total_BRL": float(df["IPI_credit_BRL"].sum()),
+        "PIS_credit_total_BRL": float(df["PIS_credit_BRL"].sum()),
+        "COFINS_credit_total_BRL": float(df["COFINS_credit_BRL"].sum()),
+        "ICMS_credit_total_BRL": float(df["ICMS_credit_BRL"].sum()),
     }
 
-    if summary["FOB_total_BRL"] > 0:
-        summary["FOB_to_Brazil_factor"] = (
-            summary["Landed_total_BRL"] / summary["FOB_total_BRL"]
-        )
-    else:
-        summary["FOB_to_Brazil_factor"] = 0.0
-
     return df, summary
-
