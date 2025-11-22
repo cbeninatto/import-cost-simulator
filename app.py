@@ -175,7 +175,10 @@ with st.container():
             "Equipamento (tipo de embarque)",
             ["FCL_20", "FCL_40", "LCL", "AIR"],
             index=2,
-            help="Usado para definir se há AFRMM (marítimo) ou não (aéreo).",
+            help=(
+                "FCL_20 / FCL_40 / LCL são tratados como embarque marítimo (AFRMM 8% sobre o frete). "
+                "AIR é tratado como embarque aéreo (sem AFRMM)."
+            ),
         )
 
         # Câmbio
@@ -195,6 +198,10 @@ with st.container():
             value=0.0,
             min_value=0.0,
             step=10.0,
+            help=(
+                "Para **EXW/FOB**: frete internacional considerado no cálculo dos impostos.\n"
+                "Para **CIF**: esse valor é ignorado na base de cálculo (já incluso no preço CIF)."
+            ),
         )
 
         transporte_rodoviario_brl = st.number_input(
@@ -236,8 +243,9 @@ with st.container():
             ["EXW", "FOB", "CIF"],
             index=0,
             help=(
-                "Por enquanto, o Incoterm é apenas informativo. "
-                "Custos compartilhados são alocados proporcionalmente ao FOB."
+                "Regra simplificada: para **EXW/FOB**, o frete informado entra na base de cálculo. "
+                "Para **CIF**, o preço informado é considerado CIF, então o frete é desconsiderado "
+                "para o cálculo dos impostos (evita dupla contagem)."
             ),
         )
 
@@ -509,8 +517,16 @@ with st.container():
             # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
             if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
                 afrmm_pct = 0.08
+                modal_label = "Marítimo (AFRMM 8%)"
             else:
                 afrmm_pct = 0.0
+                modal_label = "Aéreo (sem AFRMM)"
+
+            # Incoterm: define frete efetivo na base de cálculo
+            if incoterm == "CIF":
+                effective_freight_usd = 0.0
+            else:
+                effective_freight_usd = frete_usd
 
             # Seguro: 0,10% ad valorem sobre o FOB total (cálculo feito em calculations.py)
             insurance_usd = 0.0
@@ -528,7 +544,7 @@ with st.container():
                 state_destination=estado_destino,
                 mode=equipamento,
                 fx_rate_usd_brl=cambio,
-                freight_international_usd=frete_usd,
+                freight_international_usd=effective_freight_usd,
                 insurance_usd=insurance_usd,
                 insurance_pct=insurance_pct,
                 origin_charges_usd=origin_charges_usd,
@@ -574,7 +590,7 @@ with st.container():
                 st.metric("Custo final (R$)", f"{custo_final_brl:,.2f}")
                 st.metric("Multiplicador", f"{multiplicador:,.2f}x")
 
-            # Texto explicando créditos
+            # Texto explicando créditos + modal/incoterm
             if regime == "simples":
                 credit_text = (
                     "Créditos considerados: **nenhum**. "
@@ -591,7 +607,11 @@ with st.container():
                     "(modelo simplificado de regime não cumulativo)."
                 )
 
-            st.markdown(f"<div class='small-muted'>{credit_text}</div>", unsafe_allow_html=True)
+            extra_text = f" Modal: **{modal_label}** • Incoterm: **{incoterm}**."
+            st.markdown(
+                f"<div class='small-muted'>{credit_text}{extra_text}</div>",
+                unsafe_allow_html=True,
+            )
 
             # ===== Resultados por item =====
             st.markdown("#### Custo por produto")
