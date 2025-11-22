@@ -431,32 +431,46 @@ if st.button("Calcular custo de importação"):
         # =========================
         st.subheader("Resumo")
 
+        # Get values from summary
+        fob_total_brl = summary.get("FOB_total_BRL", 0.0)
+        fob_total_usd = summary.get("FOB_total_USD", 0.0)
+        impostos_totais = summary.get("Tax_paid_total_BRL", 0.0)
+        creditos_totais = summary.get("Tax_credit_total_BRL", 0.0)
+        frete_total_brl = summary.get("Freight_total_BRL", 0.0)
+        custo_final_brl = summary.get("Final_cost_BRL", 0.0)
+
+        # Multiplicador = Custo final (R$) / FOB total (USD)
+        if fob_total_usd > 0:
+            multiplicador = custo_final_brl / fob_total_usd
+        else:
+            multiplicador = 0.0
+
         col1, col2 = st.columns(2)
         with col1:
             st.metric(
                 "FOB total (R$)",
-                f"{summary.get('FOB_total_BRL', 0):,.2f}",
+                f"{fob_total_brl:,.2f}",
             )
             st.metric(
                 "Frete internacional (R$)",
-                f"{summary.get('Freight_total_BRL', 0):,.2f}",
+                f"{frete_total_brl:,.2f}",
             )
             st.metric(
                 "Impostos (R$)",
-                f"{summary.get('Tax_paid_total_BRL', 0):,.2f}",
+                f"{impostos_totais:,.2f}",
             )
             st.metric(
                 "Créditos de impostos (R$)",
-                f"{summary.get('Tax_credit_total_BRL', 0):,.2f}",
+                f"{creditos_totais:,.2f}",
             )
         with col2:
             st.metric(
                 "Custo final (R$)",
-                f"{summary.get('Final_cost_BRL', 0):,.2f}",
+                f"{custo_final_brl:,.2f}",
             )
             st.metric(
                 "Multiplicador",
-                f"{summary.get('FOB_to_Brazil_multiplier', 0):,.2f}x",
+                f"{multiplicador:,.2f}x",
             )
 
         # Texto explicando quais impostos geram crédito em cada regime
