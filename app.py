@@ -15,32 +15,34 @@ st.set_page_config(
 )
 
 # =========================
-# Global styling (light, minimalist, responsive cards)
+# Global styling (high-contrast, light, sleek cards)
 # =========================
 st.markdown(
     """
     <style>
         body {
-            background-color: #f3f4f6;
+            background-color: #e5e7eb;
         }
         .block-container {
             padding-top: 1.2rem;
             padding-bottom: 3rem;
+            max-width: 1100px;
+            margin: 0 auto;
         }
         .step-card {
             background: #ffffff;
-            border-radius: 16px;
-            padding: 1.25rem 1.5rem;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
-            margin-bottom: 1rem;
+            border-radius: 12px;
+            padding: 1.1rem 1.3rem;
+            border: 1px solid #d1d5db;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+            margin-bottom: 0.85rem;
         }
         .step-title {
             font-size: 0.8rem;
-            letter-spacing: 0.12em;
+            letter-spacing: 0.14em;
             text-transform: uppercase;
             font-weight: 600;
-            color: #6b7280;
+            color: #3b82f6;
             margin-bottom: 0.15rem;
         }
         .section-heading {
@@ -123,43 +125,58 @@ def normalize_ncm_search(value: str):
 
 
 # =========================
-# STEP 1 – SHIPMENT CONFIG
+# STEP 1 – SHIPMENT CONFIG (aligned rows)
 # =========================
 with st.container():
     st.markdown('<div class="step-card">', unsafe_allow_html=True)
     st.markdown(
         '<div class="step-title">Passo 1</div>'
         '<div class="section-heading">Configurações do embarque</div>'
-        '<div class="section-subtitle">Defina o estado de destino, câmbio, frete e regime tributário.</div>',
+        '<div class="section-subtitle">Defina o estado de destino, regime, modal, frete e câmbio.</div>',
         unsafe_allow_html=True,
     )
 
-    config_col1, config_col2 = st.columns(2)
-
-    with config_col1:
-        # Estado de destino
+    # Row 1: Estado de destino (UF) | Regime tributário da empresa
+    row1_col1, row1_col2 = st.columns(2)
+    with row1_col1:
         estado_destino = st.selectbox(
             "Estado de destino (UF)",
             ["RS", "SC", "PR", "SP", "RJ", "MG", "ES", "BA", "GO", "DF", "Outros"],
             index=0,
         )
 
-        # ICMS interno – default por estado (ajustável)
-        icms_map_default = {
-            "RS": 0.17,
-            "SC": 0.17,
-            "PR": 0.18,
-            "SP": 0.18,
-            "RJ": 0.20,
-            "MG": 0.18,
-            "ES": 0.17,
-            "BA": 0.18,
-            "GO": 0.17,
-            "DF": 0.18,
-            "Outros": 0.18,
+    with row1_col2:
+        regime_label = st.selectbox(
+            "Regime tributário da empresa",
+            ["Simples Nacional", "Lucro Presumido", "Lucro Real"],
+            index=1,
+        )
+        regime_map = {
+            "Simples Nacional": "simples",
+            "Lucro Presumido": "presumido",
+            "Lucro Real": "real",
         }
-        icms_aliq_padrao = icms_map_default.get(estado_destino, 0.18)
+        regime = regime_map[regime_label]
 
+    # Default ICMS by state
+    icms_map_default = {
+        "RS": 0.17,
+        "SC": 0.17,
+        "PR": 0.18,
+        "SP": 0.18,
+        "RJ": 0.20,
+        "MG": 0.18,
+        "ES": 0.17,
+        "BA": 0.18,
+        "GO": 0.17,
+        "DF": 0.18,
+        "Outros": 0.18,
+    }
+    icms_aliq_padrao = icms_map_default.get(estado_destino, 0.18)
+
+    # Row 2: Alíquota interna de ICMS | Uso das mercadorias
+    row2_col1, row2_col2 = st.columns(2)
+    with row2_col1:
         icms_aliq = st.number_input(
             "Alíquota interna de ICMS",
             value=icms_aliq_padrao,
@@ -170,7 +187,19 @@ with st.container():
             help="Alíquota interna de ICMS usada como base para o cálculo (por enquanto, única para todos os itens).",
         )
 
-        # Equipamento (modo de embarque)
+    with row2_col2:
+        uso_label = st.selectbox(
+            "Uso das mercadorias",
+            ["Indústria", "Revenda"],
+            index=1,
+            help="Usado para definir se a importação gera créditos (tratado como mercadorias para revenda/industrialização).",
+        )
+        # Internamente, tratamos ambos como 'resale'
+        purpose = "resale"
+
+    # Row 3: Equipamento (tipo de embarque) | Incoterm
+    row3_col1, row3_col2 = st.columns(2)
+    with row3_col1:
         equipamento = st.selectbox(
             "Equipamento (tipo de embarque)",
             ["FCL_20", "FCL_40", "LCL", "AIR"],
@@ -181,29 +210,34 @@ with st.container():
             ),
         )
 
-        # Câmbio
-        cambio = st.number_input(
-            "Câmbio USD → BRL",
-            value=5.50,
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
+    with row3_col2:
+        incoterm = st.selectbox(
+            "Incoterm",
+            ["EXW", "FOB", "CIF"],
+            index=0,
+            help=(
+                "Regra simplificada: para EXW/FOB, o frete informado entra na base de cálculo. "
+                "Para CIF, o preço informado é considerado CIF, então o frete é desconsiderado "
+                "na base de cálculo dos impostos (evita dupla contagem)."
+            ),
         )
+        allocation_method = "FOB"
 
-    with config_col2:
-        st.markdown("###### Custos principais")
-
+    # Row 4: Frete internacional (USD) | Transporte rodoviário até o destino (R$)
+    row4_col1, row4_col2 = st.columns(2)
+    with row4_col1:
         frete_usd = st.number_input(
             "Frete internacional (USD)",
             value=0.0,
             min_value=0.0,
             step=10.0,
             help=(
-                "Para **EXW/FOB**: frete internacional considerado no cálculo dos impostos.\n"
-                "Para **CIF**: esse valor é ignorado na base de cálculo (já incluso no preço CIF)."
+                "Para EXW/FOB: frete considerado nos impostos. "
+                "Para CIF: esse valor é ignorado (frete já embutido no preço CIF)."
             ),
         )
 
+    with row4_col2:
         transporte_rodoviario_brl = st.number_input(
             "Transporte rodoviário até o destino (R$)",
             value=0.0,
@@ -211,45 +245,16 @@ with st.container():
             step=50.0,
         )
 
-        st.markdown("###### Regime e uso")
-
-        regime_label = st.selectbox(
-            "Regime tributário da empresa",
-            ["Simples Nacional", "Lucro Presumido", "Lucro Real"],
-            index=1,
+    # Row 5: Câmbio USD → BRL (full width)
+    row5_col, = st.columns(1)
+    with row5_col:
+        cambio = st.number_input(
+            "Câmbio USD → BRL",
+            value=5.50,
+            min_value=0.0,
+            step=0.01,
+            format="%.4f",
         )
-
-        regime_map = {
-            "Simples Nacional": "simples",
-            "Lucro Presumido": "presumido",
-            "Lucro Real": "real",
-        }
-        regime = regime_map[regime_label]
-
-        uso_label = st.selectbox(
-            "Uso das mercadorias",
-            ["Indústria", "Revenda"],
-            index=1,
-            help="Usado para definir se a importação gera créditos (tratado como mercadorias para revenda/industrialização).",
-        )
-
-        # Internamente, tratamos ambos como 'resale'
-        purpose = "resale"
-
-        st.markdown("###### Incoterm")
-
-        incoterm = st.selectbox(
-            "Incoterm",
-            ["EXW", "FOB", "CIF"],
-            index=0,
-            help=(
-                "Regra simplificada: para **EXW/FOB**, o frete informado entra na base de cálculo. "
-                "Para **CIF**, o preço informado é considerado CIF, então o frete é desconsiderado "
-                "para o cálculo dos impostos (evita dupla contagem)."
-            ),
-        )
-
-        allocation_method = "FOB"
 
     st.markdown(
         '<div class="small-muted">'
