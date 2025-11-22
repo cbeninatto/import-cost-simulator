@@ -479,7 +479,7 @@ if st.button("Calcular custo de importação"):
             )
             st.metric(
                 "Frete rodoviário total (R$)",
-                f"{summary['Truck_total_BRL"]:,.2f}",
+                f"{summary.get('Truck_total_BRL', 0):,.2f}",
             )
 
         st.markdown(
