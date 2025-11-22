@@ -61,9 +61,11 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
     df["FOB_Total_USD"] = df["FOB_Unit_USD"] * df["Quantity"]
     df["FOB_Total_BRL"] = df["FOB_Total_USD"] * cfg.fx_rate_usd_brl
 
-    total_fob_brl = df["FOB_Total_BRL"].sum()
-    if total_fob_brl > 0:
-        df["share"] = df["FOB_Total_BRL"] / total_fob_brl
+    FOB_total_USD = df["FOB_Total_USD"].sum()
+    FOB_total_BRL = df["FOB_Total_BRL"].sum()
+
+    if FOB_total_BRL > 0:
+        df["share"] = df["FOB_Total_BRL"] / FOB_total_BRL
     else:
         df["share"] = 1.0 / max(len(df), 1)
 
@@ -73,7 +75,7 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
     if cfg.insurance_usd and cfg.insurance_usd > 0:
         insurance_brl = cfg.insurance_usd * cfg.fx_rate_usd_brl
     else:
-        insurance_brl = cfg.insurance_pct * total_fob_brl
+        insurance_brl = cfg.insurance_pct * FOB_total_BRL
 
     origin_brl = cfg.origin_charges_usd * cfg.fx_rate_usd_brl
     thc_brl = cfg.thc_origin_usd * cfg.fx_rate_usd_brl
@@ -151,7 +153,6 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
     # =========================
     # Tax credits by regime (simplified model)
     # =========================
-    # purpose 'resale' = mercadorias para revenda/industrialização
     eligible_for_credits = cfg.purpose == "resale"
 
     ipi_credit = pd.Series(0.0, index=df.index)
@@ -194,7 +195,7 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
 
     df["net_tax_total"] = df["Tax_paid_BRL"] - df["Tax_credit_BRL"]
 
-    # Landed cost per item
+    # Landed cost per item (full: CIF + taxes + DA + custos locais + caminhão)
     df["Landed_Cost_BRL"] = (
         df["CIF_BRL"]
         + df["II_BRL"]
@@ -213,19 +214,30 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
     # =========================
     # Summary
     # =========================
-    FOB_total_BRL = df["FOB_Total_BRL"].sum()
+    FOB_total_BRL = FOB_total_BRL
     VA_total_BRL = df["CIF_BRL"].sum()
     Tax_paid_total_BRL = df["Tax_paid_BRL"].sum()
     Tax_credit_total_BRL = df["Tax_credit_BRL"].sum()
     Net_tax_total_BRL = df["net_tax_total"].sum()
     Landed_total_BRL = df["Landed_Cost_BRL"].sum()
     Truck_total_BRL = df["Truck_BRL"].sum()
+    Freight_total_BRL = df["Freight_BRL"].sum()
     total_qty = df["Quantity"].sum()
 
+    # Custo Final (como você pediu): CIF + impostos - créditos
+    Final_cost_BRL = VA_total_BRL + Tax_paid_total_BRL - Tax_credit_total_BRL
+
+    # Fator antigo (FOB em R$) – ainda disponível caso queira
     if FOB_total_BRL > 0:
         FOB_to_Brazil_factor = Landed_total_BRL / FOB_total_BRL
     else:
         FOB_to_Brazil_factor = 0.0
+
+    # Novo Multiplicador: Landed_total_BRL / FOB_total_USD (sem converter o denominador)
+    if FOB_total_USD > 0:
+        FOB_to_Brazil_multiplier = Landed_total_BRL / FOB_total_USD
+    else:
+        FOB_to_Brazil_multiplier = 0.0
 
     if total_qty > 0:
         Avg_unit_cost_BRL = Landed_total_BRL / total_qty
@@ -233,6 +245,7 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
         Avg_unit_cost_BRL = 0.0
 
     summary = {
+        "FOB_total_USD": float(FOB_total_USD),
         "FOB_total_BRL": float(FOB_total_BRL),
         "VA_total_BRL": float(VA_total_BRL),
         "Tax_paid_total_BRL": float(Tax_paid_total_BRL),
@@ -240,7 +253,10 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
         "Net_tax_total_BRL": float(Net_tax_total_BRL),
         "Landed_total_BRL": float(Landed_total_BRL),
         "Truck_total_BRL": float(Truck_total_BRL),
+        "Freight_total_BRL": float(Freight_total_BRL),
+        "Final_cost_BRL": float(Final_cost_BRL),
         "FOB_to_Brazil_factor": float(FOB_to_Brazil_factor),
+        "FOB_to_Brazil_multiplier": float(FOB_to_Brazil_multiplier),
         "Avg_unit_cost_BRL": float(Avg_unit_cost_BRL),
         # Breakdown of credits by tax (useful for UI if needed)
         "IPI_credit_total_BRL": float(df["IPI_credit_BRL"].sum()),
