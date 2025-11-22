@@ -53,7 +53,7 @@ if "items_df" not in st.session_state:
     )
 
 
-def normalize_ncm_search(value):
+def normalize_ncm_search(value: str):
     """
     Take user input for NCM (0000.00.00, 00000000 or partial),
     strip to digits and return the raw digit string for prefix search.
@@ -67,11 +67,13 @@ def normalize_ncm_search(value):
 
 
 # =========================
-# SIDEBAR – CONFIGURAÇÕES
+# PASSO 1 – CONFIGURAÇÕES DO EMBARQUE (SEM SIDEBAR)
 # =========================
-with st.sidebar:
-    st.header("Configurações do embarque")
+st.markdown("### Passo 1 – Configurações do embarque")
 
+config_col1, config_col2 = st.columns(2)
+
+with config_col1:
     # Estado de destino
     estado_destino = st.selectbox(
         "Estado de destino (UF)",
@@ -122,7 +124,8 @@ with st.sidebar:
         format="%.4f",
     )
 
-    st.subheader("Custos principais")
+with config_col2:
+    st.markdown("#### Custos principais")
 
     frete_usd = st.number_input(
         "Frete internacional (USD)",
@@ -138,7 +141,7 @@ with st.sidebar:
         step=50.0,
     )
 
-    st.subheader("Regime tributário")
+    st.markdown("#### Regime e uso")
 
     regime_label = st.selectbox(
         "Regime tributário da empresa",
@@ -163,7 +166,7 @@ with st.sidebar:
     # Internamente, tratamos ambos como 'resale'
     purpose = "resale"
 
-    st.subheader("Incoterm")
+    st.markdown("#### Incoterm")
 
     incoterm = st.selectbox(
         "Incoterm",
@@ -178,16 +181,18 @@ with st.sidebar:
 
     allocation_method = "FOB"
 
-    st.caption(
-        "Por padrão, o seguro internacional é calculado como **0,10% ad valorem** "
-        "sobre o valor FOB total. AFRMM (8% sobre o frete marítimo) e Taxa Siscomex "
-        "(R$ 154,23) são incluídos automaticamente na base do ICMS para embarques marítimos."
-    )
+st.caption(
+    "Por padrão, o seguro internacional é calculado como **0,10% ad valorem** "
+    "sobre o valor FOB total. AFRMM (8% sobre o frete marítimo) e Taxa Siscomex "
+    "(R$ 154,23) são incluídos automaticamente na base do ICMS para embarques marítimos."
+)
 
 
 # =========================
-# FORM – ADICIONAR ITEM
+# PASSO 2 – ITENS DA SIMULAÇÃO
 # =========================
+st.markdown("### Passo 2 – Itens da simulação")
+
 st.subheader("Adicionar item à simulação")
 
 if NCM_TABLE is None:
@@ -315,7 +320,7 @@ else:
                         "IPI_rate": float(ipi_rate),
                         "PIS_rate": float(pis_rate),
                         "COFINS_rate": float(cofins_rate),
-                        "ICMS_rate": 0.0,  # será substituído pela alíquota interna da barra lateral
+                        "ICMS_rate": 0.0,  # será substituído pela alíquota interna da configuração
                     }
 
                     st.session_state["items_df"] = pd.concat(
@@ -349,9 +354,10 @@ else:
 
 
 # =========================
-# CALCULAR CUSTO DE IMPORTAÇÃO
+# PASSO 3 – RESULTADOS
 # =========================
 st.markdown("---")
+st.markdown("### Passo 3 – Resultados")
 
 if st.button("Calcular custo de importação"):
     items_df = st.session_state["items_df"]
