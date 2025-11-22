@@ -256,6 +256,23 @@ with st.container():
             format="%.4f",
         )
 
+    # Advanced cost adjustments: EXW uplift and LCL extra handling
+    with st.expander("Ajustes avançados de custos (opcional)"):
+        exw_extra_origin_usd = st.number_input(
+            "Ajuste EXW → FOB (USD por embarque)",
+            value=300.0,
+            min_value=0.0,
+            step=10.0,
+            help="Valor aproximado de custos na origem (coleta, terminal, documentação) quando o Incoterm é EXW.",
+        )
+        lcl_extra_dest_brl = st.number_input(
+            "Taxas adicionais LCL no destino (R$ por embarque)",
+            value=0.0,
+            min_value=0.0,
+            step=50.0,
+            help="Custos extras de manuseio LCL no destino (ex.: taxas de consolidador, handling).",
+        )
+
     st.markdown(
         '<div class="small-muted">'
         "Seguro padrão: <strong>0,10% ad valorem</strong> sobre o FOB total (se não informado). "
@@ -533,14 +550,23 @@ with st.container():
             else:
                 effective_freight_usd = frete_usd
 
+            # EXW → FOB uplift: custos de origem só se Incoterm for EXW
+            if incoterm == "EXW":
+                origin_charges_usd = exw_extra_origin_usd
+            else:
+                origin_charges_usd = 0.0
+
+            # LCL extra handling no destino
+            if equipamento == "LCL":
+                local_port_costs_brl = lcl_extra_dest_brl
+            else:
+                local_port_costs_brl = 0.0
+
             # Seguro: 0,10% ad valorem sobre o FOB total (cálculo feito em calculations.py)
             insurance_usd = 0.0
             insurance_pct = 0.001  # 0,1%
 
-            origin_charges_usd = 0.0
             thc_origin_usd = 0.0
-
-            local_port_costs_brl = 0.0
             other_local_costs_brl = 0.0
 
             siscomex_brl = 154.23
