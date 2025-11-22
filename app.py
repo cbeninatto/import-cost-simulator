@@ -4,21 +4,14 @@ import pandas as pd
 from calculations import ShipmentConfig, compute_landed_cost
 from ncm_loader import load_ncm_tec_table
 
-# =========================
-# Carrega tabela NCM / TEC / TIPI
-# =========================
-try:
-    NCM_TEC_TABLE = load_ncm_tec_table()
-except Exception:
-    NCM_TEC_TABLE = None
 
 # =========================
-# Configuração básica
+# Page config
 # =========================
 st.set_page_config(
     page_title="Simulador de Custo de Importação",
     page_icon="📦",
-    layout="wide"
+    layout="wide",
 )
 
 st.title("📦 Simulador de Custo de Importação")
@@ -28,8 +21,21 @@ st.markdown(
     "incluindo impostos, frete internacional e transporte rodoviário."
 )
 
+
 # =========================
-# Estado dos itens em sessão
+# Load NCM / II / IPI from combined_taxes.csv
+# =========================
+LOAD_ERROR = None
+try:
+    # This reads data/combined_taxes.csv via ncm_loader.py
+    NCM_TEC_TABLE = load_ncm_tec_table()
+except Exception as e:
+    NCM_TEC_TABLE = None
+    LOAD_ERROR = repr(e)
+
+
+# =========================
+# Session state for items
 # =========================
 if "items_df" not in st.session_state:
     st.session_state["items_df"] = pd.DataFrame(
@@ -47,19 +53,17 @@ if "items_df" not in st.session_state:
     )
 
 
-def normalize_ncm8_any_format(value: str) -> str | None:
+def normalize_ncm_search(value):
     """
-    Recebe NCM em formato '0000.00.00' ou '00000000' (ou parcial),
-    remove tudo que não for dígito e retorna os primeiros 8 dígitos,
-    preenchendo com zeros à direita se necessário.
+    Take user input for NCM (0000.00.00 or 00000000 or partial),
+    strip to digits and return the raw digit string for prefix search.
     """
     if not isinstance(value, str):
         return None
     digits = "".join(ch for ch in value if ch.isdigit())
     if not digits:
         return None
-    digits = digits[:8]
-    return digits.ljust(8, "0")
+    return digits
 
 
 # =========================
@@ -75,7 +79,7 @@ with st.sidebar:
         index=0,
     )
 
-    # ICMS interno – podemos definir padrão por estado (ex.: 17% para a maioria)
+    # ICMS interno – default por estado (ajustável)
     icms_map_default = {
         "RS": 0.17,
         "SC": 0.17,
@@ -98,7 +102,7 @@ with st.sidebar:
         max_value=1.0,
         step=0.01,
         format="%.2f",
-        help="Alíquota interna de ICMS usada para todos os itens (por enquanto)."
+        help="Alíquota interna de ICMS usada para todos os itens (por enquanto).",
     )
 
     # Equipamento (modo de embarque)
@@ -156,7 +160,7 @@ with st.sidebar:
         help="Ambas as opções são tratadas como mercadorias para revenda/industrialização em termos de créditos.",
     )
 
-    # Internamente, tratamos Indústria e Revenda como 'resale'
+    # Internamente, tratamos ambos como 'resale'
     purpose = "resale"
 
     st.subheader("Incoterm")
@@ -172,7 +176,6 @@ with st.sidebar:
         ),
     )
 
-    # Por enquanto, mantemos a alocação sempre por valor FOB
     allocation_method = "FOB"
 
     st.caption(
@@ -181,18 +184,26 @@ with st.sidebar:
         "(R$ 154,23) são incluídos automaticamente na base do ICMS para embarques marítimos."
     )
 
-# =========================
-# FORMULÁRIO – ADIÇÃO DE ITENS
-# =========================
 
+# =========================
+# FORM – ADICIONAR ITEM
+# =========================
 st.subheader("Adicionar item à simulação")
 
-if NCM_TEC_TABLE is None or NCM_TEC_TABLE.empty:
+if NCM_TEC_TABLE is None:
     st.error(
-        "Não foi possível carregar a tabela de NCM/TEC/TIPI. "
-        "Verifique se os arquivos `data/tec.xlsx` e `data/tipi_ipi_rates.csv` estão corretos."
+        "Não foi possível carregar a tabela de NCM/II/IPI. "
+        "Verifique se o arquivo `data/combined_taxes.csv` está presente e com o layout correto."
     )
+    if LOAD_ERROR:
+        st.code(f"Detalhes técnicos:\n{LOAD_ERROR}", language="text")
 else:
+    if NCM_TEC_TABLE.empty:
+        st.warning(
+            "A tabela NCM/II/IPI foi carregada, mas está vazia. "
+            "Provavelmente há um problema de layout em `combined_taxes.csv`."
+        )
+
     with st.form("add_item_form"):
         col_a, col_b = st.columns(2)
         with col_a:
@@ -226,22 +237,23 @@ else:
 
         st.markdown("### Sugestões de NCM")
 
-        # Busca por NCM ou descrição
         matches = pd.DataFrame()
+        # Busca por NCM (prefixo de dígitos)
         if ncm_input.strip():
-            ncm8_search = normalize_ncm8_any_format(ncm_input)
-            if ncm8_search is not None:
+            digits = normalize_ncm_search(ncm_input)
+            if digits is not None:
                 matches = NCM_TEC_TABLE[
-                    NCM_TEC_TABLE["NCM8"].astype(str).str.startswith(ncm8_search)
+                    NCM_TEC_TABLE["NCM8"].astype(str).str.startswith(digits)
                 ].copy()
+        # Ou busca por descrição livre
         elif descricao_livre.strip():
             tokens = [t for t in descricao_livre.lower().split() if t]
-            df = NCM_TEC_TABLE.copy()
+            df_search = NCM_TEC_TABLE.copy()
             if tokens:
-                mask = pd.Series(True, index=df.index)
+                mask = pd.Series(True, index=df_search.index)
                 for t in tokens:
-                    mask &= df["Descricao"].str.lower().str.contains(t, na=False)
-                matches = df[mask].copy()
+                    mask &= df_search["Descricao"].str.lower().str.contains(t, na=False)
+                matches = df_search[mask].copy()
 
         if not matches.empty:
             matches = matches.sort_values("NCM8").head(50)
@@ -250,11 +262,16 @@ else:
             selected_idx = st.selectbox(
                 "Selecione o NCM sugerido",
                 options=option_indices,
-                format_func=lambda idx: f"{matches.loc[idx, 'NCM_dotted']} — {matches.loc[idx, 'Descricao']}",
+                format_func=lambda idx: (
+                    f"{matches.loc[idx, 'NCM_dotted']} — {matches.loc[idx, 'Descricao']}"
+                ),
             )
         else:
             selected_idx = None
-            st.info("Nenhum NCM sugerido ainda. Digite parte do NCM ou da descrição para buscar.")
+            st.info(
+                "Nenhum NCM sugerido ainda. "
+                "Digite parte do NCM ou da descrição para buscar."
+            )
 
         submitted = st.form_submit_button("➕ Adicionar item")
 
@@ -264,10 +281,8 @@ else:
             else:
                 row = matches.loc[selected_idx]
 
-                # Descrição final: prioridade para descrição livre do usuário
                 descricao_final = descricao_livre.strip() or str(row["Descricao"])
 
-                # Alíquotas oficiais (quando existirem)
                 ii_rate = row.get("II_rate", 0.0)
                 if pd.isna(ii_rate):
                     ii_rate = 0.0
@@ -276,8 +291,8 @@ else:
                 if pd.isna(ipi_rate):
                     ipi_rate = 0.0
 
-                # PIS/COFINS padrão importação (podemos sofisticar depois por NCM)
-                pis_rate = 0.021   # 2,1%
+                # PIS/COFINS padrão importação (pode ser refinado por NCM no futuro)
+                pis_rate = 0.021     # 2,1%
                 cofins_rate = 0.0965  # 9,65%
 
                 new_item = {
@@ -289,7 +304,7 @@ else:
                     "IPI_rate": float(ipi_rate),
                     "PIS_rate": float(pis_rate),
                     "COFINS_rate": float(cofins_rate),
-                    "ICMS_rate": 0.0,  # sempre usamos a alíquota interna da barra lateral
+                    "ICMS_rate": 0.0,  # será substituído pela alíquota interna da barra lateral
                 }
 
                 st.session_state["items_df"] = pd.concat(
@@ -299,10 +314,10 @@ else:
 
                 st.success(f"Item com NCM {row['NCM_dotted']} adicionado à simulação.")
 
+
 # =========================
 # LISTA DE ITENS ADICIONADOS
 # =========================
-
 st.subheader("Itens adicionados")
 
 if st.session_state["items_df"].empty:
@@ -321,10 +336,10 @@ else:
         if st.button("🧹 Limpar todos os itens"):
             st.session_state["items_df"] = st.session_state["items_df"].iloc[0:0].copy()
 
-# =========================
-# BOTÃO CALCULAR
-# =========================
 
+# =========================
+# CALCULAR CUSTO DE IMPORTAÇÃO
+# =========================
 st.markdown("---")
 
 if st.button("Calcular custo de importação"):
@@ -336,12 +351,20 @@ if st.button("Calcular custo de importação"):
         clean_df = items_df.copy()
 
         # Garantir tipos numéricos
-        for col in ["Quantity", "FOB_Unit_USD", "II_rate", "IPI_rate", "PIS_rate", "COFINS_rate", "ICMS_rate"]:
+        for col in [
+            "Quantity",
+            "FOB_Unit_USD",
+            "II_rate",
+            "IPI_rate",
+            "PIS_rate",
+            "COFINS_rate",
+            "ICMS_rate",
+        ]:
             if col not in clean_df.columns:
                 clean_df[col] = 0.0
             clean_df[col] = clean_df[col].fillna(0.0).astype(float)
 
-        # Define ICMS_rate por item a partir do estado (um único ICMS interno por enquanto)
+        # ICMS por item = alíquota interna do estado (por enquanto)
         clean_df["ICMS_rate"] = float(icms_aliq)
 
         # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
@@ -354,15 +377,12 @@ if st.button("Calcular custo de importação"):
         insurance_usd = 0.0
         insurance_pct = 0.001  # 0,1%
 
-        # Encargos de origem e THC: por enquanto 0 na simulação base
         origin_charges_usd = 0.0
         thc_origin_usd = 0.0
 
-        # Custos locais além do frete rodoviário: por enquanto 0 (podemos refinar depois)
         local_port_costs_brl = 0.0
         other_local_costs_brl = 0.0
 
-        # Siscomex padrão
         siscomex_brl = 154.23
 
         cfg = ShipmentConfig(
@@ -390,7 +410,7 @@ if st.button("Calcular custo de importação"):
         per_item, summary = compute_landed_cost(clean_df, cfg)
 
         # =========================
-        # RESULTADOS
+        # RESULTADOS POR ITEM
         # =========================
         st.subheader("Resultados por item")
 
@@ -433,6 +453,9 @@ if st.button("Calcular custo de importação"):
 
         st.dataframe(display_df, use_container_width=True)
 
+        # =========================
+        # RESUMO DO EMBARQUE
+        # =========================
         st.subheader("Resumo do embarque")
 
         col1, col2 = st.columns(2)
@@ -446,9 +469,18 @@ if st.button("Calcular custo de importação"):
             )
         with col2:
             st.metric("Impostos pagos (R$)", f"{summary['Tax_paid_total_BRL']:,.2f}")
-            st.metric("Créditos de impostos (R$)", f"{summary['Tax_credit_total_BRL']:,.2f}")
-            st.metric("Custo líquido de impostos (R$)", f"{summary['Net_tax_total_BRL']:,.2f}")
-            st.metric("Frete rodoviário total (R$)", f"{summary['Truck_total_BRL']:,.2f}")
+            st.metric(
+                "Créditos de impostos (R$)",
+                f"{summary['Tax_credit_total_BRL']:,.2f}",
+            )
+            st.metric(
+                "Custo líquido de impostos (R$)",
+                f"{summary['Net_tax_total_BRL']:,.2f}",
+            )
+            st.metric(
+                "Frete rodoviário total (R$)",
+                f"{summary['Truck_total_BRL"]:,.2f}",
+            )
 
         st.markdown(
             "⚠️ **Atenção:** esta é uma simulação simplificada, com regras padrão de base de cálculo e créditos "
