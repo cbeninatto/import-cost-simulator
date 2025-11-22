@@ -242,10 +242,8 @@ else:
         # Busca por NCM (prefixo de dígitos)
         if ncm_input.strip():
             digits = normalize_ncm_search(ncm_input)
-            if digits is not None:
-                matches = NCM_TABLE[
-                    NCM_TABLE["digits"].str.startswith(digits)
-                ].copy()
+            if digits is not None and "digits" in NCM_TABLE.columns:
+                matches = NCM_TABLE[NCM_TABLE["digits"].str.startswith(digits)].copy()
 
         # Ou busca por descrição
         elif descricao_livre.strip():
@@ -259,7 +257,10 @@ else:
 
         if not matches.empty:
             # sort by level (4-digit -> 5-digit -> 6-digit -> 8-digit) and code
-            matches = matches.sort_values(["digits_len", "NCM_dotted"]).head(100)
+            sort_cols = ["NCM_dotted"]
+            if "digits_len" in matches.columns:
+                sort_cols = ["digits_len", "NCM_dotted"]
+            matches = matches.sort_values(sort_cols).head(100)
             option_indices = matches.index.tolist()
 
             selected_idx = st.selectbox(
@@ -283,7 +284,7 @@ else:
                 st.error("Selecione um NCM sugerido antes de adicionar o item.")
             else:
                 row = matches.loc[selected_idx]
-                digits_len = int(row.get("digits_len", 0))
+                digits_len = int(row.get("digits_len", 0)) if "digits_len" in row else 0
 
                 # Only allow adding final 8-digit NCMs (0000.00.00)
                 if digits_len != 8:
