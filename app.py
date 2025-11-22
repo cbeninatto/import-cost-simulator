@@ -418,7 +418,7 @@ if st.button("Calcular custo de importação"):
             allocation_method=allocation_method,
         )
 
-       per_item, summary = compute_landed_cost(clean_df, cfg)
+        per_item, summary = compute_landed_cost(clean_df, cfg)
 
         # =========================
         # RESUMO
@@ -436,7 +436,7 @@ if st.button("Calcular custo de importação"):
                 f"{summary.get('Freight_total_BRL', 0):,.2f}",
             )
             st.metric(
-                "Custo de nacionalização (R$)",
+                "Impostos (R$)",
                 f"{summary.get('Tax_paid_total_BRL', 0):,.2f}",
             )
             st.metric(
