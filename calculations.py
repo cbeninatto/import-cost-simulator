@@ -189,13 +189,11 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
     if regime == "simples":
         # No credits in this simplified model
         pass
-
     elif regime == "presumido":
         if eligible_for_credits:
             # Credit IPI and ICMS on mercadorias
             ipi_credit = df["IPI_BRL"]
             icms_credit = df["ICMS_BRL"]
-
     elif regime == "real":
         if eligible_for_credits:
             # Credit IPI, PIS, COFINS and ICMS on mercadorias
@@ -219,50 +217,50 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
     df["net_tax_total"] = df["Tax_paid_BRL"] - df["Tax_credit_BRL"]
 
     # -------------------------
-    # Landed cost per item (full)
+    # Landed cost per item
+    #   gross_landed = CIF + impostos + DA + custos locais + caminhão
+    #   net_landed   = gross_landed - créditos de impostos
     # -------------------------
-    df["Landed_Cost_BRL"] = (
+    df["Landed_Gross_BRL"] = (
         df["CIF_BRL"]
-        + df["II_BRL"]
-        + df["IPI_BRL"]
-        + df["PIS_BRL"]
-        + df["COFINS_BRL"]
-        + df["ICMS_BRL"]
+        + df["Tax_paid_BRL"]
         + df["DA_BRL"]
         + df["Local_Non_DA_BRL"]
         + df["Truck_BRL"]
     )
 
+    df["Landed_Cost_BRL"] = df["Landed_Gross_BRL"] - df["Tax_credit_BRL"]
+
     df["Unit_Cost_BRL"] = df["Landed_Cost_BRL"] / df["Quantity"].replace(0, pd.NA)
     df["Unit_Cost_BRL"] = df["Unit_Cost_BRL"].fillna(0.0)
 
     # -------------------------
-    # Summary values
+    # Summary values (NET of credits)
     # -------------------------
     VA_total_BRL = float(df["CIF_BRL"].sum())
     Tax_paid_total_BRL = float(df["Tax_paid_BRL"].sum())
     Tax_credit_total_BRL = float(df["Tax_credit_BRL"].sum())
     Net_tax_total_BRL = float(df["net_tax_total"].sum())
-    Landed_total_BRL = float(df["Landed_Cost_BRL"].sum())
+    Landed_total_BRL = float(df["Landed_Cost_BRL"].sum())  # NET landed
+    Landed_gross_total_BRL = float(df["Landed_Gross_BRL"].sum())
     Truck_total_BRL = float(df["Truck_BRL"].sum())
     Freight_total_BRL = float(df["Freight_BRL"].sum())
     total_qty = float(df["Quantity"].sum())
 
-    # Custo final (como definido por você):
-    # CIF total + impostos totais - créditos totais
-    Final_cost_BRL = VA_total_BRL + Tax_paid_total_BRL - Tax_credit_total_BRL
+    # Custo final: custo total após créditos, incluindo CIF + impostos + DA + frete local
+    Final_cost_BRL = Landed_total_BRL
 
-    # Fator antigo (em R$) – ainda calculado caso queira usar depois
-    if FOB_total_BRL > 0:
-        FOB_to_Brazil_factor = Landed_total_BRL / FOB_total_BRL
-    else:
-        FOB_to_Brazil_factor = 0.0
-
-    # Multiplicador: landed em R$ / FOB em USD (sem converter o denominador)
+    # Multiplicador: landed NET em R$ / FOB em USD (sem converter o denominador)
     if FOB_total_USD > 0:
         FOB_to_Brazil_multiplier = Landed_total_BRL / FOB_total_USD
     else:
         FOB_to_Brazil_multiplier = 0.0
+
+    # (Opcional) fator em R$: landed NET / FOB em R$
+    if FOB_total_BRL > 0:
+        FOB_to_Brazil_factor = Landed_total_BRL / FOB_total_BRL
+    else:
+        FOB_to_Brazil_factor = 0.0
 
     if total_qty > 0:
         Avg_unit_cost_BRL = Landed_total_BRL / total_qty
@@ -277,6 +275,7 @@ def compute_landed_cost(items_df: pd.DataFrame, cfg: ShipmentConfig) -> Tuple[pd
         "Tax_credit_total_BRL": float(Tax_credit_total_BRL),
         "Net_tax_total_BRL": float(Net_tax_total_BRL),
         "Landed_total_BRL": float(Landed_total_BRL),
+        "Landed_gross_total_BRL": float(Landed_gross_total_BRL),
         "Truck_total_BRL": float(Truck_total_BRL),
         "Freight_total_BRL": float(Freight_total_BRL),
         "Final_cost_BRL": float(Final_cost_BRL),
