@@ -3,3 +3,4 @@ pandas
 dataclasses-json
 pdfplumber
 openai
+requests
