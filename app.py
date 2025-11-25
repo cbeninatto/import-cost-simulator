@@ -316,7 +316,7 @@ with st.container():
                 f"{st.session_state['ptax_error']}"
             )
 
-    # Advanced cost adjustments: EXW uplift and LCL extra handling
+    # Advanced cost adjustments: EXW uplift, LCL extra handling, logistics agent fee
     with st.expander("Ajustes avançados de custos (opcional)"):
         exw_extra_origin_usd = st.number_input(
             "Ajuste EXW → FOB (USD por embarque)",
@@ -332,12 +332,20 @@ with st.container():
             step=50.0,
             help="Custos extras de manuseio LCL no destino (ex.: taxas de consolidador, handling).",
         )
+        logistics_agent_fee_brl = st.number_input(
+            "Serviços do agente de carga (R$ por embarque)",
+            value=0.0,
+            min_value=0.0,
+            step=50.0,
+            help="Honorários do agente de carga / despachante (ex.: serviços Anderson).",
+        )
 
     st.markdown(
         '<div class="small-muted">'
         "Seguro padrão: <strong>0,10% ad valorem</strong> sobre o FOB total (se não informado). "
         "AFRMM (8% sobre o frete) e Taxa Siscomex (R$ 154,23) são incluídos automaticamente "
-        "na base do ICMS para embarques marítimos."
+        "na base do ICMS para embarques marítimos. Serviços do agente de carga são tratados como "
+        "custo local adicional (fora da base do ICMS neste modelo simplificado)."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -627,7 +635,9 @@ with st.container():
             insurance_pct = 0.001  # 0,1%
 
             thc_origin_usd = 0.0
-            other_local_costs_brl = 0.0
+
+            # Serviços do agente de carga (Anderson, etc.)
+            other_local_costs_brl = logistics_agent_fee_brl
 
             siscomex_brl = 154.23
 
