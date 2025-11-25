@@ -4,3 +4,4 @@ dataclasses-json
 pdfplumber
 openai
 requests
+fpdf2
