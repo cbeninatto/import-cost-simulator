@@ -22,15 +22,44 @@ st.set_page_config(
 # =========================
 LIGHT_THEME_CSS = """
 <style>
-    body {
+    .stApp {
         background-color: #f3f4f6;
+        color: #111827;
     }
     .block-container {
-        padding-top: 1.0rem;
+        padding-top: 1.5rem;
         padding-bottom: 3rem;
         max-width: 1100px;
         margin: 0 auto;
     }
+    /* Header with logo and title */
+    .app-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.4rem;
+    }
+    .app-logo img {
+        height: 32px;
+        max-width: 130px;
+        display: block;
+        filter: brightness(0); /* force black in light mode */
+    }
+    .app-title {
+        display: flex;
+        flex-direction: row;
+        align-items: baseline;
+        gap: 0.3rem;
+    }
+    .app-title-emoji {
+        font-size: 1.4rem;
+    }
+    .app-title-text {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #111827;
+    }
+
     .step-card {
         background: transparent;
         border-radius: 0;
@@ -65,7 +94,8 @@ LIGHT_THEME_CSS = """
         padding-top: 0.15rem;
         padding-bottom: 0.15rem;
     }
-    .stTable td, .stTable th {
+    .stTable td,
+    .stTable th {
         font-size: 0.85rem;
         padding: 0.3rem 0.5rem;
     }
@@ -74,16 +104,44 @@ LIGHT_THEME_CSS = """
 
 DARK_THEME_CSS = """
 <style>
-    body {
+    .stApp {
         background-color: #020617;
         color: #e5e7eb;
     }
     .block-container {
-        padding-top: 1.0rem;
+        padding-top: 1.5rem;
         padding-bottom: 3rem;
         max-width: 1100px;
         margin: 0 auto;
     }
+    .app-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.4rem;
+    }
+    .app-logo img {
+        height: 32px;
+        max-width: 130px;
+        display: block;
+        /* turn logo white in dark mode */
+        filter: brightness(0) invert(1);
+    }
+    .app-title {
+        display: flex;
+        flex-direction: row;
+        align-items: baseline;
+        gap: 0.3rem;
+    }
+    .app-title-emoji {
+        font-size: 1.4rem;
+    }
+    .app-title-text {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #e5e7eb;
+    }
+
     .step-card {
         background: transparent;
         border-radius: 0;
@@ -118,7 +176,8 @@ DARK_THEME_CSS = """
         padding-top: 0.15rem;
         padding-bottom: 0.15rem;
     }
-    .stTable td, .stTable th {
+    .stTable td,
+    .stTable th {
         font-size: 0.85rem;
         padding: 0.3rem 0.5rem;
     }
@@ -126,20 +185,37 @@ DARK_THEME_CSS = """
 """
 
 # =========================
-# Title & theme toggle
+# Theme toggle + header
 # =========================
-st.title("📦 Simulador de Custo de Importação")
 
+# First, toggle
 dark_mode = st.toggle(
     "Modo escuro",
     value=False,
-    help="Alterne entre tema claro e escuro."
+    help="Alterne entre tema claro e escuro.",
 )
 
+# Then apply the correct CSS
 if dark_mode:
     st.markdown(DARK_THEME_CSS, unsafe_allow_html=True)
 else:
     st.markdown(LIGHT_THEME_CSS, unsafe_allow_html=True)
+
+# Custom header with logo + title (avoids being cut off)
+st.markdown(
+    """
+    <div class="app-header">
+        <div class="app-logo">
+            <img src="ckstsourcing_logo.svg" alt="CKST Sourcing Logo">
+        </div>
+        <div class="app-title">
+            <span class="app-title-emoji">📦</span>
+            <span class="app-title-text">Simulador de Custo de Importação</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     "Calcule o **custo Brasil** de um embarque com vários produtos, "
