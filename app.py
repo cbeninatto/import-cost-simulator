@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import requests
+import os
 from fpdf import FPDF  # PDF generator
 
 from calculations import ShipmentConfig, compute_landed_cost
@@ -144,8 +145,7 @@ else:
 st.markdown(header_html, unsafe_allow_html=True)
 
 st.markdown(
-    "Calcule o custo de uma importação com vários produtos, "
-    "incluindo impostos, frete internacional e transporte rodoviário."
+    "Simule o custo Brasil completo de um embarque com vários produtos."
 )
 
 # =========================
@@ -257,13 +257,15 @@ def generate_pdf_report(
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # Tentar inserir o logo da Cook Street (PNG)
-    try:
-        # você precisa ter um arquivo ckstsourcing_logo.png no diretório raiz do repo
-        pdf.image("ckstsourcing_logo.png", x=10, y=8, w=30)
-        pdf.ln(18)
-    except Exception:
-        # se não houver logo PNG, segue sem imagem
+    # Tentar inserir o logo da Cook Street (PNG) usando caminho relativo ao app.py
+    logo_path = os.path.join(os.path.dirname(__file__), "ckstsourcing_logo.png")
+    if os.path.exists(logo_path):
+        try:
+            pdf.image(logo_path, x=10, y=8, w=30)
+            pdf.ln(18)
+        except Exception:
+            pdf.ln(4)
+    else:
         pdf.ln(4)
 
     # Header
@@ -574,7 +576,7 @@ with st.container():
             )
 
     # Ajustes avançados (não colapsados)
-    st.markdown("##### Ajustes avançados de custos")
+    st.markdown("##### Ajustes avançados de custos (opcional)")
     exw_extra_origin_usd = st.number_input(
         "Ajuste EXW → FOB (USD por embarque)",
         value=300.0,
