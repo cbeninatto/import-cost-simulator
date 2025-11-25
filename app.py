@@ -144,7 +144,7 @@ else:
 st.markdown(header_html, unsafe_allow_html=True)
 
 st.markdown(
-    "Calcule o **custo Brasil** de um embarque com vários produtos, "
+    "Calcule o custo de uma importação com vários produtos, "
     "incluindo impostos, frete internacional e transporte rodoviário."
 )
 
