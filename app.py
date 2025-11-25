@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import requests
+from fpdf import FPDF  # <-- PDF generator
 
 from calculations import ShipmentConfig, compute_landed_cost
 from ncm_loader import load_ncm_tec_table
@@ -169,6 +170,147 @@ def set_ptax_rate():
         st.session_state["ptax_error"] = ""
     except Exception as e:
         st.session_state["ptax_error"] = str(e)
+
+
+def generate_pdf_report(
+    summary,
+    items_df,
+    cfg: ShipmentConfig,
+    regime_label: str,
+    uso_label: str,
+    incoterm: str,
+    modal_label: str,
+    cambio_date: str,
+    frete_usd: float,
+    transporte_rodoviario_brl: float,
+    exw_extra_origin_usd: float,
+    lcl_extra_dest_brl: float,
+    logistics_agent_fee_brl: float,
+):
+    """Gera um PDF simples com resumo e itens da simulação."""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Header
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, "Simulação de Custo de Importação", ln=True)
+
+    pdf.set_font("Helvetica", size=10)
+    today_str = datetime.date.today().strftime("%d/%m/%Y")
+    pdf.cell(0, 6, f"Data da simulação: {today_str}", ln=True)
+    if cambio_date:
+        pdf.cell(0, 6, f"Câmbio PTAX (venda) utilizado: {cambio_date}", ln=True)
+    pdf.ln(4)
+
+    # Configurações do embarque
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, "Configurações do embarque", ln=True)
+    pdf.set_font("Helvetica", size=10)
+    pdf.cell(0, 5, f"Estado de destino (UF): {cfg.state_destination}", ln=True)
+    pdf.cell(0, 5, f"Regime tributário: {regime_label}", ln=True)
+    pdf.cell(0, 5, f"Uso das mercadorias: {uso_label}", ln=True)
+    pdf.cell(0, 5, f"Modal: {modal_label}", ln=True)
+    pdf.cell(0, 5, f"Equipamento: {cfg.mode}", ln=True)
+    pdf.cell(0, 5, f"Incoterm: {incoterm}", ln=True)
+    pdf.cell(0, 5, f"Câmbio USD → BRL: {cfg.fx_rate_usd_brl:.4f}", ln=True)
+    pdf.cell(0, 5, f"Frete internacional (USD): {frete_usd:,.2f}", ln=True)
+    pdf.cell(0, 5, f"Transporte rodoviário até o destino (R$): {transporte_rodoviario_brl:,.2f}", ln=True)
+    if exw_extra_origin_usd > 0:
+        pdf.cell(0, 5, f"Ajuste EXW → FOB (USD): {exw_extra_origin_usd:,.2f}", ln=True)
+    if lcl_extra_dest_brl > 0:
+        pdf.cell(0, 5, f"Taxas adicionais LCL no destino (R$): {lcl_extra_dest_brl:,.2f}", ln=True)
+    if logistics_agent_fee_brl > 0:
+        pdf.cell(0, 5, f"Serviços do agente de carga (R$): {logistics_agent_fee_brl:,.2f}", ln=True)
+
+    pdf.ln(4)
+
+    # Resumo financeiro
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, "Resumo financeiro", ln=True)
+    pdf.set_font("Helvetica", size=10)
+
+    fob_total_brl = summary.get("FOB_total_BRL", 0.0)
+    fob_total_usd = summary.get("FOB_total_USD", 0.0)
+    frete_total_brl = summary.get("Freight_total_BRL", 0.0)
+    impostos_totais = summary.get("Tax_paid_total_BRL", 0.0)
+    creditos_totais = summary.get("Tax_credit_total_BRL", 0.0)
+    custo_final_brl = summary.get("Final_cost_BRL", 0.0)
+
+    if fob_total_usd > 0:
+        multiplicador = custo_final_brl / fob_total_usd
+    else:
+        multiplicador = 0.0
+
+    pdf.cell(0, 5, f"FOB total (R$): {fob_total_brl:,.2f}", ln=True)
+    pdf.cell(0, 5, f"FOB total (USD): {fob_total_usd:,.2f}", ln=True)
+    pdf.cell(0, 5, f"Frete internacional (R$): {frete_total_brl:,.2f}", ln=True)
+    pdf.cell(0, 5, f"Impostos totais (R$): {impostos_totais:,.2f}", ln=True)
+    pdf.cell(0, 5, f"Créditos de impostos (R$): {creditos_totais:,.2f}", ln=True)
+    pdf.cell(0, 5, f"Custo final (R$): {custo_final_brl:,.2f}", ln=True)
+    pdf.cell(0, 5, f"Multiplicador (Custo final / FOB USD): {multiplicador:,.2f}x", ln=True)
+
+    pdf.ln(4)
+
+    # Custo por produto
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, "Itens da simulação", ln=True)
+
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(60, 6, "Produto", border=1)
+    pdf.cell(25, 6, "NCM", border=1)
+    pdf.cell(15, 6, "Qtd.", border=1, align="R")
+    pdf.cell(30, 6, "FOB unit. (USD)", border=1, align="R")
+    pdf.cell(30, 6, "Custo unit. (R$)", border=1, ln=True, align="R")
+
+    pdf.set_font("Helvetica", size=9)
+
+    for _, row in items_df.iterrows():
+        desc = str(row.get("Description", ""))[:40]
+        ncm = str(row.get("NCM", ""))
+        qtd = float(row.get("Quantity", 0))
+        fob_unit = float(row.get("FOB_Unit_USD", 0))
+        unit_cost = float(row.get("Unit_Cost_BRL", 0))
+
+        pdf.cell(60, 6, desc, border=1)
+        pdf.cell(25, 6, ncm, border=1)
+        pdf.cell(15, 6, f"{qtd:.0f}", border=1, align="R")
+        pdf.cell(30, 6, f"{fob_unit:,.2f}", border=1, align="R")
+        pdf.cell(30, 6, f"{unit_cost:,.2f}", border=1, ln=True, align="R")
+
+    # Observações regime/creditos
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 6, "Observações sobre créditos de impostos:", ln=True)
+    pdf.set_font("Helvetica", size=9)
+
+    if cfg.regime == "simples":
+        pdf.multi_cell(
+            0,
+            4,
+            "Simples Nacional: nesta simulação, não são considerados créditos de IPI, PIS, "
+            "COFINS ou ICMS. Todos os impostos compõem o custo final.",
+        )
+    elif cfg.regime == "presumido":
+        pdf.multi_cell(
+            0,
+            4,
+            "Lucro Presumido: créditos considerados de IPI e ICMS sobre mercadorias para "
+            "revenda/industrialização. PIS e COFINS tratados como cumulativos, sem crédito "
+            "(modelo simplificado).",
+        )
+    else:
+        pdf.multi_cell(
+            0,
+            4,
+            "Lucro Real: créditos considerados de IPI, PIS, COFINS e ICMS sobre mercadorias "
+            "para revenda/industrialização (modelo simplificado, não substitui análise fiscal "
+            "específica do cliente).",
+        )
+
+    # Retorna bytes do PDF
+    pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    return pdf_bytes
 
 
 # =========================
@@ -714,7 +856,7 @@ with st.container():
                 unsafe_allow_html=True,
             )
 
-            # ===== Resultados por item =====
+            # ===== Custo por produto (tabela simples) =====
             st.markdown("#### Custo por produto")
 
             simple_cols = [
@@ -734,6 +876,38 @@ with st.container():
             )
             st.table(simple_df)
 
+            # ===== PDF output =====
+            # Criar DF para o PDF combinando itens + custo unitário
+            items_for_pdf = clean_df.copy()
+            if "Unit_Cost_BRL" in per_item.columns and len(per_item) == len(clean_df):
+                items_for_pdf["Unit_Cost_BRL"] = per_item["Unit_Cost_BRL"].values
+            else:
+                items_for_pdf["Unit_Cost_BRL"] = 0.0
+
+            pdf_bytes = generate_pdf_report(
+                summary=summary,
+                items_df=items_for_pdf,
+                cfg=cfg,
+                regime_label=regime_label,
+                uso_label=uso_label,
+                incoterm=incoterm,
+                modal_label=modal_label,
+                cambio_date=st.session_state.get("cambio_date", ""),
+                frete_usd=frete_usd,
+                transporte_rodoviario_brl=transporte_rodoviario_brl,
+                exw_extra_origin_usd=exw_extra_origin_usd,
+                lcl_extra_dest_brl=lcl_extra_dest_brl,
+                logistics_agent_fee_brl=logistics_agent_fee_brl,
+            )
+
+            st.download_button(
+                "📄 Baixar relatório em PDF",
+                data=pdf_bytes,
+                file_name="simulacao_custo_importacao.pdf",
+                mime="application/pdf",
+            )
+
+            # ===== Detalhes fiscais por item (expander) =====
             with st.expander("Ver detalhes fiscais por item"):
                 cols_to_show = [
                     "Description",
