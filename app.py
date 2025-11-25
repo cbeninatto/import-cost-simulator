@@ -18,12 +18,12 @@ st.set_page_config(
 )
 
 # =========================
-# Base CSS (single theme, no toggle)
+# Base CSS (single theme)
 # =========================
 BASE_CSS = """
 <style>
     .block-container {
-        padding-top: 1.5rem;
+        padding-top: 2.5rem;
         padding-bottom: 3rem;
         max-width: 1100px;
         margin: 0 auto;
@@ -33,14 +33,15 @@ BASE_CSS = """
         display: flex;
         align-items: center;
         gap: 0.75rem;
+        margin-top: 0.25rem;
         margin-bottom: 0.4rem;
     }
     .app-logo svg {
         height: 32px;
         max-width: 130px;
         display: block;
-        /* keep logo black on light background */
-        filter: brightness(0);
+        /* render logo white on dark background */
+        filter: invert(1) brightness(1.8);
     }
     .app-title {
         display: flex;
@@ -200,7 +201,7 @@ def normalize_ncm_search(value: str):
 
 def fetch_usd_brl_ptax_previous():
     """
-    Busca a cotação de venda do USD/BRL (PTAX) do dia útil anterior,
+    Busca a cotação de compra do USD/BRL (PTAX) do dia útil anterior,
     voltando até 9 dias se necessário (feriados/fins de semana).
     """
     today = datetime.date.today()
@@ -217,13 +218,14 @@ def fetch_usd_brl_ptax_previous():
         data = r.json()
         values = data.get("value", [])
         if values:
-            rate = float(values[0]["cotacaoVenda"])
+            # usar cotacaoCompra conforme solicitado
+            rate = float(values[0]["cotacaoCompra"])
             return rate, d
     raise RuntimeError("Não foi possível obter a cotação do dólar nos últimos dias úteis.")
 
 
 def set_ptax_rate():
-    """Callback para o botão de buscar câmbio PTAX (dia útil anterior)."""
+    """Callback para o botão de buscar câmbio Banco Central (dia útil anterior)."""
     try:
         rate, d = fetch_usd_brl_ptax_previous()
         st.session_state["cambio_input"] = rate
@@ -255,6 +257,15 @@ def generate_pdf_report(
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
+    # Tentar inserir o logo da Cook Street (PNG)
+    try:
+        # você precisa ter um arquivo ckstsourcing_logo.png no diretório raiz do repo
+        pdf.image("ckstsourcing_logo.png", x=10, y=8, w=30)
+        pdf.ln(18)
+    except Exception:
+        # se não houver logo PNG, segue sem imagem
+        pdf.ln(4)
+
     # Header
     pdf.set_font("Helvetica", "B", 14)
     pdf.cell(0, 10, "Simulação de Custo de Importação", ln=True)
@@ -263,7 +274,12 @@ def generate_pdf_report(
     today_str = datetime.date.today().strftime("%d/%m/%Y")
     pdf.cell(0, 6, f"Data da simulação: {today_str}", ln=True)
     if cambio_date:
-        pdf.cell(0, 6, f"Câmbio PTAX (venda) utilizado: {cambio_date}", ln=True)
+        pdf.cell(
+            0,
+            6,
+            f"Câmbio Banco Central (compra) utilizado: {cambio_date}",
+            ln=True,
+        )
     pdf.ln(4)
 
     # Configurações do embarque
@@ -274,7 +290,15 @@ def generate_pdf_report(
     pdf.cell(0, 5, f"Regime tributário: {regime_label}", ln=True)
     pdf.cell(0, 5, f"Uso das mercadorias: {uso_label}", ln=True)
     pdf.cell(0, 5, f"Modal: {modal_label}", ln=True)
-    pdf.cell(0, 5, f"Equipamento: {cfg.mode}", ln=True)
+
+    # Exibir equipamento com espaço, se for FCL_20 / FCL_40
+    equip_display = cfg.mode
+    if cfg.mode == "FCL_20":
+        equip_display = "FCL 20"
+    elif cfg.mode == "FCL_40":
+        equip_display = "FCL 40"
+
+    pdf.cell(0, 5, f"Equipamento: {equip_display}", ln=True)
     pdf.cell(0, 5, f"Incoterm: {incoterm}", ln=True)
     pdf.cell(0, 5, f"Câmbio USD/BRL: {cfg.fx_rate_usd_brl:.4f}", ln=True)
     pdf.cell(0, 5, f"Frete internacional (USD): {frete_usd:,.2f}", ln=True)
@@ -471,15 +495,22 @@ with st.container():
     # Row 3: Equipamento (tipo de embarque) | Incoterm
     row3_col1, row3_col2 = st.columns(2)
     with row3_col1:
-        equipamento = st.selectbox(
+        equip_label = st.selectbox(
             "Equipamento (tipo de embarque)",
-            ["FCL_20", "FCL_40", "LCL", "AIR"],
+            ["FCL 20", "FCL 40", "LCL", "AIR"],
             index=2,
             help=(
-                "FCL_20 / FCL_40 / LCL são tratados como embarque marítimo (AFRMM 8% sobre o frete). "
+                "FCL 20 / FCL 40 / LCL são tratados como embarque marítimo (AFRMM 8% sobre o frete). "
                 "AIR é tratado como embarque aéreo (sem AFRMM)."
             ),
         )
+        equip_map = {
+            "FCL 20": "FCL_20",
+            "FCL 40": "FCL_40",
+            "LCL": "LCL",
+            "AIR": "AIR",
+        }
+        equipamento = equip_map[equip_label]
 
     with row3_col2:
         incoterm = st.selectbox(
@@ -516,7 +547,7 @@ with st.container():
             step=50.0,
         )
 
-    # Row 5: Câmbio USD → BRL (full width) + PTAX button
+    # Row 5: Câmbio USD → BRL (full width) + Banco Central button
     row5_col, = st.columns(1)
     with row5_col:
         cambio = st.number_input(
@@ -528,41 +559,43 @@ with st.container():
             format="%.4f",
         )
         st.button(
-            "Usar câmbio PTAX (dia útil anterior)",
+            "Usar câmbio Banco Central (dia útil anterior)",
             on_click=set_ptax_rate,
-            help="Busca automaticamente a cotação de venda PTAX do dia útil anterior no Banco Central.",
+            help="Busca automaticamente a cotação de compra PTAX do dia útil anterior no Banco Central.",
         )
         if st.session_state.get("cambio_date"):
-            st.caption(f"Câmbio PTAX venda de {st.session_state['cambio_date']}.")
+            st.caption(
+                f"Câmbio Banco Central (compra) de {st.session_state['cambio_date']}."
+            )
         if st.session_state.get("ptax_error"):
             st.warning(
                 "Não foi possível obter a cotação automaticamente: "
                 f"{st.session_state['ptax_error']}"
             )
 
-    # Advanced cost adjustments
-    with st.expander("Ajustes avançados de custos (opcional)"):
-        exw_extra_origin_usd = st.number_input(
-            "Ajuste EXW → FOB (USD por embarque)",
-            value=300.0,
-            min_value=0.0,
-            step=10.0,
-            help="Valor aproximado de custos na origem (coleta, terminal, documentação) quando o Incoterm é EXW.",
-        )
-        lcl_extra_dest_brl = st.number_input(
-            "Taxas adicionais LCL no destino (R$ por embarque)",
-            value=0.0,
-            min_value=0.0,
-            step=50.0,
-            help="Custos extras de manuseio LCL no destino (ex.: taxas de consolidador, handling).",
-        )
-        logistics_agent_fee_brl = st.number_input(
-            "Serviços do agente de carga (R$ por embarque)",
-            value=0.0,
-            min_value=0.0,
-            step=50.0,
-            help="Honorários do agente de carga / despachante (ex.: serviços Anderson).",
-        )
+    # Ajustes avançados (não colapsados)
+    st.markdown("##### Ajustes avançados de custos (opcional)")
+    exw_extra_origin_usd = st.number_input(
+        "Ajuste EXW → FOB (USD por embarque)",
+        value=300.0,
+        min_value=0.0,
+        step=10.0,
+        help="Valor aproximado de custos na origem (coleta, terminal, documentação) quando o Incoterm é EXW.",
+    )
+    lcl_extra_dest_brl = st.number_input(
+        "Taxas adicionais LCL no destino (R$ por embarque)",
+        value=0.0,
+        min_value=0.0,
+        step=50.0,
+        help="Custos extras de manuseio LCL no destino (ex.: taxas de consolidador, handling).",
+    )
+    logistics_agent_fee_brl = st.number_input(
+        "Serviços do agente de carga (R$ por embarque)",
+        value=0.0,
+        min_value=0.0,
+        step=50.0,
+        help="Honorários do agente de carga / despachante (ex.: serviços Anderson).",
+    )
 
     st.markdown(
         '<div class="small-muted">'
@@ -768,13 +801,28 @@ with st.container():
 
         st.table(display_items)
 
+        # Remover item específico
+        if not items_df.empty:
+            labels = []
+            for i, row in items_df.iterrows():
+                labels.append(f"{i+1} – {row.get('Description', '')} (NCM {row.get('NCM', '')})")
+            idx_choice = st.selectbox(
+                "Selecione um item para remover",
+                options=list(range(len(labels))),
+                format_func=lambda i: labels[i],
+                key="remove_item_select",
+            )
+            if st.button("Remover item selecionado", key="remove_item_button"):
+                idx_to_drop = items_df.index[idx_choice]
+                st.session_state["items_df"] = items_df.drop(idx_to_drop).reset_index(drop=True)
+                st.success("Item removido da simulação.")
+
         col_r1, col_r2 = st.columns(2)
         with col_r1:
-            if st.button("🗑️ Remover último item"):
-                st.session_state["items_df"] = st.session_state["items_df"].iloc[:-1, :].copy()
-        with col_r2:
             if st.button("🧹 Limpar todos os itens"):
                 st.session_state["items_df"] = st.session_state["items_df"].iloc[0:0].copy()
+        with col_r2:
+            st.write("")  # spacer
 
     st.markdown("</div>", unsafe_allow_html=True)
 
