@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import requests
-from fpdf import FPDF  # <-- PDF generator
+from fpdf import FPDF  # PDF generator
 
 from calculations import ShipmentConfig, compute_landed_cost
 from ncm_loader import load_ncm_tec_table
@@ -189,6 +189,8 @@ def generate_pdf_report(
 ):
     """Gera um PDF simples com resumo e itens da simulação."""
     pdf = FPDF()
+    # Important: ensure encoding supports acentos (Windows-1252)
+    pdf.set_doc_option("core_fonts_encoding", "windows-1252")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -213,11 +215,12 @@ def generate_pdf_report(
     pdf.cell(0, 5, f"Modal: {modal_label}", ln=True)
     pdf.cell(0, 5, f"Equipamento: {cfg.mode}", ln=True)
     pdf.cell(0, 5, f"Incoterm: {incoterm}", ln=True)
-    pdf.cell(0, 5, f"Câmbio USD → BRL: {cfg.fx_rate_usd_brl:.4f}", ln=True)
+    # Remove arrow char to avoid encoding issues
+    pdf.cell(0, 5, f"Câmbio USD/BRL: {cfg.fx_rate_usd_brl:.4f}", ln=True)
     pdf.cell(0, 5, f"Frete internacional (USD): {frete_usd:,.2f}", ln=True)
     pdf.cell(0, 5, f"Transporte rodoviário até o destino (R$): {transporte_rodoviario_brl:,.2f}", ln=True)
     if exw_extra_origin_usd > 0:
-        pdf.cell(0, 5, f"Ajuste EXW → FOB (USD): {exw_extra_origin_usd:,.2f}", ln=True)
+        pdf.cell(0, 5, f"Ajuste EXW para FOB (USD): {exw_extra_origin_usd:,.2f}", ln=True)
     if lcl_extra_dest_brl > 0:
         pdf.cell(0, 5, f"Taxas adicionais LCL no destino (R$): {lcl_extra_dest_brl:,.2f}", ln=True)
     if logistics_agent_fee_brl > 0:
@@ -288,24 +291,24 @@ def generate_pdf_report(
         pdf.multi_cell(
             0,
             4,
-            "Simples Nacional: nesta simulação, não são considerados créditos de IPI, PIS, "
-            "COFINS ou ICMS. Todos os impostos compõem o custo final.",
+            "Simples Nacional: nesta simulação, não são considerados créditos de IPI, "
+            "PIS, COFINS ou ICMS. Todos os impostos compõem o custo final.",
         )
     elif cfg.regime == "presumido":
         pdf.multi_cell(
             0,
             4,
-            "Lucro Presumido: créditos considerados de IPI e ICMS sobre mercadorias para "
-            "revenda/industrialização. PIS e COFINS tratados como cumulativos, sem crédito "
-            "(modelo simplificado).",
+            "Lucro Presumido: créditos considerados de IPI e ICMS sobre mercadorias "
+            "para revenda/industrialização. PIS e COFINS tratados como cumulativos, "
+            "sem crédito (modelo simplificado).",
         )
     else:
         pdf.multi_cell(
             0,
             4,
-            "Lucro Real: créditos considerados de IPI, PIS, COFINS e ICMS sobre mercadorias "
-            "para revenda/industrialização (modelo simplificado, não substitui análise fiscal "
-            "específica do cliente).",
+            "Lucro Real: créditos considerados de IPI, PIS, COFINS e ICMS sobre "
+            "mercadorias para revenda/industrialização (modelo simplificado, não "
+            "substitui análise fiscal específica do cliente).",
         )
 
     # Retorna bytes do PDF
@@ -877,7 +880,6 @@ with st.container():
             st.table(simple_df)
 
             # ===== PDF output =====
-            # Criar DF para o PDF combinando itens + custo unitário
             items_for_pdf = clean_df.copy()
             if "Unit_Cost_BRL" in per_item.columns and len(per_item) == len(clean_df):
                 items_for_pdf["Unit_Cost_BRL"] = per_item["Unit_Cost_BRL"].values
