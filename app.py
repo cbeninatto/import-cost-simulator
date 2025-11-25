@@ -885,12 +885,13 @@ with st.container():
             )
 
             with st.expander("Ver detalhes fiscais por item"):
+                # Columns we'd like to show if they exist
                 cols_to_show = [
                     "Description",
                     "NCM",
                     "Quantity",
                     "FOB_Total_BRL",
-                    "CIF_BRL",
+                    "CIF_BRL",             # will only appear if your calculations.py provides it
                     "II_BRL",
                     "IPI_BRL",
                     "PIS_BRL",
@@ -902,8 +903,16 @@ with st.container():
                     "Truck_BRL",
                 ]
 
-                display_df = per_item[cols_to_show].rename(
-                    columns={
+                # Keep only columns that are actually present in per_item
+                available_cols = [c for c in cols_to_show if c in per_item.columns]
+
+                if not available_cols:
+                    st.info(
+                        "Nenhuma coluna detalhada disponível no resultado. "
+                        "Verifique a implementação de `compute_landed_cost`."
+                    )
+                else:
+                    rename_map = {
                         "Description": "Produto",
                         "Quantity": "Qtd.",
                         "FOB_Total_BRL": "FOB total (R$)",
@@ -918,9 +927,15 @@ with st.container():
                         "Unit_Cost_BRL": "Custo unitário por produto (R$)",
                         "Truck_BRL": "Transporte rodoviário (R$)",
                     }
-                )
 
-                # use_container_width deprecation fix
-                st.dataframe(display_df, width="stretch")
+                    effective_rename = {
+                        k: v for k, v in rename_map.items() if k in available_cols
+                    }
+
+                    display_df = per_item[available_cols].rename(
+                        columns=effective_rename
+                    )
+
+                    st.dataframe(display_df, width="stretch")
 
     st.markdown("</div>", unsafe_allow_html=True)
