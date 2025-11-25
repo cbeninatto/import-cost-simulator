@@ -39,11 +39,11 @@ LIGHT_THEME_CSS = """
         gap: 0.75rem;
         margin-bottom: 0.4rem;
     }
-    .app-logo img {
+    .app-logo svg {
         height: 32px;
         max-width: 130px;
         display: block;
-        filter: brightness(0); /* force black in light mode */
+        filter: brightness(0); /* black in light mode */
     }
     .app-title {
         display: flex;
@@ -120,7 +120,7 @@ DARK_THEME_CSS = """
         gap: 0.75rem;
         margin-bottom: 0.4rem;
     }
-    .app-logo img {
+    .app-logo svg {
         height: 32px;
         max-width: 130px;
         display: block;
@@ -185,37 +185,58 @@ DARK_THEME_CSS = """
 """
 
 # =========================
+# Utils
+# =========================
+
+def load_logo_svg() -> str | None:
+    """Load inline SVG for the header logo."""
+    try:
+        with open("ckstsourcing_logo.svg", "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+# =========================
 # Theme toggle + header
 # =========================
 
-# First, toggle
 dark_mode = st.toggle(
     "Modo escuro",
     value=False,
     help="Alterne entre tema claro e escuro.",
 )
 
-# Then apply the correct CSS
 if dark_mode:
     st.markdown(DARK_THEME_CSS, unsafe_allow_html=True)
 else:
     st.markdown(LIGHT_THEME_CSS, unsafe_allow_html=True)
 
-# Custom header with logo + title (avoids being cut off)
-st.markdown(
-    """
+logo_svg = load_logo_svg()
+
+if logo_svg:
+    header_html = f"""
     <div class="app-header">
         <div class="app-logo">
-            <img src="ckstsourcing_logo.svg" alt="CKST Sourcing Logo">
+            {logo_svg}
         </div>
         <div class="app-title">
             <span class="app-title-emoji">📦</span>
             <span class="app-title-text">Simulador de Custo de Importação</span>
         </div>
     </div>
-    """,
-    unsafe_allow_html=True,
-)
+    """
+else:
+    header_html = """
+    <div class="app-header">
+        <div class="app-title">
+            <span class="app-title-emoji">📦</span>
+            <span class="app-title-text">Simulador de Custo de Importação</span>
+        </div>
+    </div>
+    """
+
+st.markdown(header_html, unsafe_allow_html=True)
 
 st.markdown(
     "Calcule o **custo Brasil** de um embarque com vários produtos, "
@@ -679,149 +700,148 @@ with st.container():
                 "Provavelmente há um problema de layout em `combined_taxes.csv`."
             )
 
-        with st.form("add_item_form"):
-            col_prod, = st.columns(1)
-            with col_prod:
-                product_ref = st.text_input(
-                    "Código ou nome do produto (referência interna)",
-                    help="Ex.: MV150-ZN-450, Bolsa Neo Preta, etc. Apenas para seu controle.",
-                )
+        # --- Inputs (no form: Enter won't submit) ---
+        col_prod, = st.columns(1)
+        with col_prod:
+            product_ref = st.text_input(
+                "Código ou nome do produto (referência interna)",
+                help="Ex.: MV150-ZN-450, Bolsa Neo Preta, etc. Apenas para seu controle.",
+            )
 
-            col_ncm, col_desc = st.columns([1, 1.2])
-            with col_ncm:
-                ncm_input = st.text_input(
-                    "NCM (0000.00.00 ou 00000000)",
-                    help="Digite o NCM completo ou parcial. O sistema filtrará os códigos finais (8 dígitos).",
-                )
+        col_ncm, col_desc = st.columns([1, 1.2])
+        with col_ncm:
+            ncm_input = st.text_input(
+                "NCM (0000.00.00 ou 00000000)",
+                help="Digite o NCM completo ou parcial. O sistema filtrará os códigos finais (8 dígitos).",
+            )
 
-            with col_desc:
-                search_hint = st.text_input(
-                    "Busca por descrição (opcional)",
-                    help="Use palavras-chave do TEC/TIPI (ex.: 'assento', 'bolsas', 'corrediças').",
-                )
+        with col_desc:
+            search_hint = st.text_input(
+                "Busca por descrição (opcional)",
+                help="Use palavras-chave do TEC/TIPI (ex.: 'assento', 'bolsas', 'corrediças').",
+            )
 
-            col_qtd, col_fob = st.columns(2)
-            with col_qtd:
-                quantidade = st.number_input(
-                    "Quantidade",
-                    min_value=1,
-                    value=1,
-                    step=1,
-                )
-            with col_fob:
-                fob_unit = st.number_input(
-                    "FOB unitário (USD)",
-                    min_value=0.0,
-                    value=1.00,
-                    step=0.01,
-                    format="%.4f",
-                )
+        col_qtd, col_fob = st.columns(2)
+        with col_qtd:
+            quantidade = st.number_input(
+                "Quantidade",
+                min_value=1,
+                value=1,
+                step=1,
+            )
+        with col_fob:
+            fob_unit = st.number_input(
+                "FOB unitário (USD)",
+                min_value=0.0,
+                value=1.00,
+                step=0.01,
+                format="%.4f",
+            )
 
-            st.markdown("##### Sugestões de NCM finais (8 dígitos)")
+        st.markdown("##### Sugestões de NCM finais (8 dígitos)")
 
-            matches = pd.DataFrame()
+        matches = pd.DataFrame()
+        selected_idx = None
 
-            if ncm_input.strip():
-                digits = normalize_ncm_search(ncm_input)
-                if digits is not None and "digits" in NCM_TABLE.columns:
-                    tmp = NCM_TABLE.copy()
-                    tmp = tmp[tmp["digits"].str.startswith(digits)]
-                    if "digits_len" in tmp.columns:
-                        tmp = tmp[tmp["digits_len"] == 8]
-                    matches = tmp
+        if ncm_input.strip():
+            digits = normalize_ncm_search(ncm_input)
+            if digits is not None and "digits" in NCM_TABLE.columns:
+                tmp = NCM_TABLE.copy()
+                tmp = tmp[tmp["digits"].str.startswith(digits)]
+                if "digits_len" in tmp.columns:
+                    tmp = tmp[tmp["digits_len"] == 8]
+                matches = tmp
 
-            elif search_hint.strip():
-                tokens = [t for t in search_hint.lower().split() if t]
-                df_search = NCM_TABLE.copy()
-                if tokens:
-                    mask = pd.Series(True, index=df_search.index)
-                    for t in tokens:
-                        mask &= df_search["Descricao"].str.lower().str.contains(t, na=False)
-                    tmp = df_search[mask]
-                    if "digits_len" in tmp.columns:
-                        tmp = tmp[tmp["digits_len"] == 8]
-                    matches = tmp
+        elif search_hint.strip():
+            tokens = [t for t in search_hint.lower().split() if t]
+            df_search = NCM_TABLE.copy()
+            if tokens:
+                mask = pd.Series(True, index=df_search.index)
+                for t in tokens:
+                    mask &= df_search["Descricao"].str.lower().str.contains(t, na=False)
+                tmp = df_search[mask]
+                if "digits_len" in tmp.columns:
+                    tmp = tmp[tmp["digits_len"] == 8]
+                matches = tmp
 
-            if not matches.empty:
-                sort_cols = ["NCM_dotted"]
-                matches = matches.sort_values(sort_cols).head(80)
-                option_indices = matches.index.tolist()
+        if not matches.empty:
+            sort_cols = ["NCM_dotted"]
+            matches = matches.sort_values(sort_cols).head(80)
+            option_indices = matches.index.tolist()
 
-                def format_ncm_option(idx):
-                    row = matches.loc[idx]
-                    code = str(row.get("NCM_dotted", "")).strip()
-                    desc = str(row.get("Descricao", "")).strip()
+            def format_ncm_option(idx):
+                row = matches.loc[idx]
+                code = str(row.get("NCM_dotted", "")).strip()
+                desc = str(row.get("Descricao", "")).strip()
 
-                    ii = row.get("II_rate", 0.0)
-                    ipi = row.get("IPI_rate", 0.0)
+                ii = row.get("II_rate", 0.0)
+                ipi = row.get("IPI_rate", 0.0)
 
-                    try:
-                        ii_pct = f"{ii * 100:.1f}%"
-                    except Exception:
-                        ii_pct = "-"
-                    try:
-                        ipi_pct = f"{ipi * 100:.1f}%"
-                    except Exception:
-                        ipi_pct = "-"
+                try:
+                    ii_pct = f"{ii * 100:.1f}%"
+                except Exception:
+                    ii_pct = "-"
+                try:
+                    ipi_pct = f"{ipi * 100:.1f}%"
+                except Exception:
+                    ipi_pct = "-"
 
-                    return f"{code}  {desc}  • II {ii_pct}  |  IPI {ipi_pct}"
+                return f"{code}  {desc}  • II {ii_pct}  |  IPI {ipi_pct}"
 
-                selected_idx = st.selectbox(
-                    "Selecione o NCM final",
-                    options=option_indices,
-                    format_func=format_ncm_option,
-                )
+            selected_idx = st.selectbox(
+                "Selecione o NCM final",
+                options=option_indices,
+                format_func=format_ncm_option,
+            )
+        else:
+            st.info(
+                "Nenhum NCM final listado ainda. "
+                "Digite parte do NCM ou use palavras da descrição para buscar."
+            )
 
+        add_clicked = st.button("➕ Adicionar item à simulação")
+
+        if add_clicked:
+            if not product_ref.strip():
+                st.error("Informe um código ou nome para o produto (referência interna).")
+            elif selected_idx is None:
+                st.error("Selecione um NCM final antes de adicionar o item.")
             else:
-                selected_idx = None
-                st.info(
-                    "Nenhum NCM final listado ainda. "
-                    "Digite parte do NCM ou use palavras da descrição para buscar."
+                row = matches.loc[selected_idx]
+
+                ncm_final = str(row.get("NCM_dotted", "")).strip()
+
+                ii_rate = row.get("II_rate", 0.0)
+                if pd.isna(ii_rate):
+                    ii_rate = 0.0
+
+                ipi_rate = row.get("IPI_rate", 0.0)
+                if pd.isna(ipi_rate):
+                    ipi_rate = 0.0
+
+                pis_rate = 0.021
+                cofins_rate = 0.0965
+
+                new_item = {
+                    "NCM": ncm_final,
+                    "Description": product_ref.strip(),
+                    "Quantity": float(quantidade),
+                    "FOB_Unit_USD": float(fob_unit),
+                    "II_rate": float(ii_rate),
+                    "IPI_rate": float(ipi_rate),
+                    "PIS_rate": float(pis_rate),
+                    "COFINS_rate": float(cofins_rate),
+                    "ICMS_rate": 0.0,
+                }
+
+                st.session_state["items_df"] = pd.concat(
+                    [st.session_state["items_df"], pd.DataFrame([new_item])],
+                    ignore_index=True,
                 )
 
-            submitted = st.form_submit_button("➕ Adicionar item à simulação")
-
-            if submitted:
-                if not product_ref.strip():
-                    st.error("Informe um código ou nome para o produto (referência interna).")
-                elif selected_idx is None:
-                    st.error("Selecione um NCM final antes de adicionar o item.")
-                else:
-                    row = matches.loc[selected_idx]
-
-                    ncm_final = str(row.get("NCM_dotted", "")).strip()
-
-                    ii_rate = row.get("II_rate", 0.0)
-                    if pd.isna(ii_rate):
-                        ii_rate = 0.0
-
-                    ipi_rate = row.get("IPI_rate", 0.0)
-                    if pd.isna(ipi_rate):
-                        ipi_rate = 0.0
-
-                    pis_rate = 0.021
-                    cofins_rate = 0.0965
-
-                    new_item = {
-                        "NCM": ncm_final,
-                        "Description": product_ref.strip(),
-                        "Quantity": float(quantidade),
-                        "FOB_Unit_USD": float(fob_unit),
-                        "II_rate": float(ii_rate),
-                        "IPI_rate": float(ipi_rate),
-                        "PIS_rate": float(pis_rate),
-                        "COFINS_rate": float(cofins_rate),
-                        "ICMS_rate": 0.0,
-                    }
-
-                    st.session_state["items_df"] = pd.concat(
-                        [st.session_state["items_df"], pd.DataFrame([new_item])],
-                        ignore_index=True,
-                    )
-
-                    st.success(
-                        f"Item '{product_ref.strip()}' com NCM {ncm_final} adicionado à simulação."
-                    )
+                st.success(
+                    f"Item '{product_ref.strip()}' com NCM {ncm_final} adicionado à simulação."
+                )
 
     st.markdown("#### Itens adicionados")
 
