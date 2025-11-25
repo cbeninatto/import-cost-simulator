@@ -18,14 +18,10 @@ st.set_page_config(
 )
 
 # =========================
-# Theme CSS definitions
+# Base CSS (single theme, no toggle)
 # =========================
-LIGHT_THEME_CSS = """
+BASE_CSS = """
 <style>
-    .stApp {
-        background-color: #f3f4f6;
-        color: #111827;
-    }
     .block-container {
         padding-top: 1.5rem;
         padding-bottom: 3rem;
@@ -43,7 +39,8 @@ LIGHT_THEME_CSS = """
         height: 32px;
         max-width: 130px;
         display: block;
-        filter: brightness(0); /* black in light mode */
+        /* keep logo black on light background */
+        filter: brightness(0);
     }
     .app-title {
         display: flex;
@@ -57,7 +54,6 @@ LIGHT_THEME_CSS = """
     .app-title-text {
         font-size: 1.25rem;
         font-weight: 600;
-        color: #111827;
     }
 
     .step-card {
@@ -78,7 +74,6 @@ LIGHT_THEME_CSS = """
     .section-heading {
         font-size: 1.05rem;
         font-weight: 600;
-        color: #111827;
         margin-bottom: 0.15rem;
     }
     .section-subtitle {
@@ -102,94 +97,14 @@ LIGHT_THEME_CSS = """
 </style>
 """
 
-DARK_THEME_CSS = """
-<style>
-    .stApp {
-        background-color: #020617;
-        color: #e5e7eb;
-    }
-    .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 3rem;
-        max-width: 1100px;
-        margin: 0 auto;
-    }
-    .app-header {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        margin-bottom: 0.4rem;
-    }
-    .app-logo svg {
-        height: 32px;
-        max-width: 130px;
-        display: block;
-        /* turn logo white in dark mode */
-        filter: brightness(0) invert(1);
-    }
-    .app-title {
-        display: flex;
-        flex-direction: row;
-        align-items: baseline;
-        gap: 0.3rem;
-    }
-    .app-title-emoji {
-        font-size: 1.4rem;
-    }
-    .app-title-text {
-        font-size: 1.25rem;
-        font-weight: 600;
-        color: #e5e7eb;
-    }
-
-    .step-card {
-        background: transparent;
-        border-radius: 0;
-        padding: 0.4rem 0 0.8rem 0;
-        border-top: 2px solid #38bdf8;
-        margin-bottom: 0.8rem;
-    }
-    .step-title {
-        font-size: 0.72rem;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-        font-weight: 600;
-        color: #38bdf8;
-        margin-bottom: 0.05rem;
-    }
-    .section-heading {
-        font-size: 1.05rem;
-        font-weight: 600;
-        color: #e5e7eb;
-        margin-bottom: 0.15rem;
-    }
-    .section-subtitle {
-        font-size: 0.84rem;
-        color: #9ca3af;
-        margin-bottom: 0.5rem;
-    }
-    .small-muted {
-        font-size: 0.8rem;
-        color: #9ca3af;
-    }
-    div[data-testid="stMetric"] {
-        padding-top: 0.15rem;
-        padding-bottom: 0.15rem;
-    }
-    .stTable td,
-    .stTable th {
-        font-size: 0.85rem;
-        padding: 0.3rem 0.5rem;
-    }
-</style>
-"""
+st.markdown(BASE_CSS, unsafe_allow_html=True)
 
 # =========================
 # Utils
 # =========================
 
 def load_logo_svg() -> str | None:
-    """Load inline SVG for the header logo."""
+    """Load inline SVG for the header logo from ckstsourcing_logo.svg in repo root."""
     try:
         with open("ckstsourcing_logo.svg", "r", encoding="utf-8") as f:
             return f.read()
@@ -198,19 +113,8 @@ def load_logo_svg() -> str | None:
 
 
 # =========================
-# Theme toggle + header
+# Header with logo
 # =========================
-
-dark_mode = st.toggle(
-    "Modo escuro",
-    value=False,
-    help="Alterne entre tema claro e escuro.",
-)
-
-if dark_mode:
-    st.markdown(DARK_THEME_CSS, unsafe_allow_html=True)
-else:
-    st.markdown(LIGHT_THEME_CSS, unsafe_allow_html=True)
 
 logo_svg = load_logo_svg()
 
