@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import datetime
+import requests
 
 from calculations import ShipmentConfig, compute_landed_cost
 from ncm_loader import load_ncm_tec_table
@@ -93,7 +95,7 @@ except Exception as e:
     LOAD_ERROR = repr(e)
 
 # =========================
-# Session state for items
+# Session state
 # =========================
 if "items_df" not in st.session_state:
     st.session_state["items_df"] = pd.DataFrame(
@@ -110,6 +112,15 @@ if "items_df" not in st.session_state:
         ]
     )
 
+if "cambio_input" not in st.session_state:
+    st.session_state["cambio_input"] = 5.50
+
+if "cambio_date" not in st.session_state:
+    st.session_state["cambio_date"] = ""
+
+if "ptax_error" not in st.session_state:
+    st.session_state["ptax_error"] = ""
+
 
 def normalize_ncm_search(value: str):
     """
@@ -122,6 +133,42 @@ def normalize_ncm_search(value: str):
     if not digits:
         return None
     return digits
+
+
+def fetch_usd_brl_ptax_previous():
+    """
+    Busca a cotação de venda do USD/BRL (PTAX) do dia útil anterior,
+    voltando até 9 dias se necessário (feriados/fins de semana).
+    """
+    today = datetime.date.today()
+    for i in range(1, 10):
+        d = today - datetime.timedelta(days=i)
+        date_str = d.strftime("%m-%d-%Y")  # formato exigido pelo serviço PTAX
+        url = (
+            "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/"
+            "CotacaoDolarDia(dataCotacao=@dataCotacao)?"
+            f"@dataCotacao='{date_str}'&$top=1&$format=json"
+        )
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        values = data.get("value", [])
+        if values:
+            # cotação de venda (BRL por 1 USD)
+            rate = float(values[0]["cotacaoVenda"])
+            return rate, d
+    raise RuntimeError("Não foi possível obter a cotação do dólar nos últimos dias úteis.")
+
+
+def set_ptax_rate():
+    """Callback para o botão de buscar câmbio PTAX (dia útil anterior)."""
+    try:
+        rate, d = fetch_usd_brl_ptax_previous()
+        st.session_state["cambio_input"] = rate
+        st.session_state["cambio_date"] = d.strftime("%d/%m/%Y")
+        st.session_state["ptax_error"] = ""
+    except Exception as e:
+        st.session_state["ptax_error"] = str(e)
 
 
 # =========================
@@ -245,16 +292,29 @@ with st.container():
             step=50.0,
         )
 
-    # Row 5: Câmbio USD → BRL (full width)
+    # Row 5: Câmbio USD → BRL (full width) + PTAX button
     row5_col, = st.columns(1)
     with row5_col:
         cambio = st.number_input(
             "Câmbio USD → BRL",
-            value=5.50,
+            value=st.session_state["cambio_input"],
+            key="cambio_input",
             min_value=0.0,
             step=0.01,
             format="%.4f",
         )
+        st.button(
+            "Usar câmbio PTAX (dia útil anterior)",
+            on_click=set_ptax_rate,
+            help="Busca automaticamente a cotação de venda PTAX do dia útil anterior no Banco Central.",
+        )
+        if st.session_state.get("cambio_date"):
+            st.caption(f"Câmbio PTAX venda de {st.session_state['cambio_date']}.")
+        if st.session_state.get("ptax_error"):
+            st.warning(
+                "Não foi possível obter a cotação automaticamente: "
+                f"{st.session_state['ptax_error']}"
+            )
 
     # Advanced cost adjustments: EXW uplift and LCL extra handling
     with st.expander("Ajustes avançados de custos (opcional)"):
