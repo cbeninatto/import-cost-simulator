@@ -63,12 +63,10 @@ st.markdown(
             font-size: 0.8rem;
             color: #6b7280;
         }
-        /* Compact metrics */
         div[data-testid="stMetric"] {
             padding-top: 0.25rem;
             padding-bottom: 0.25rem;
         }
-        /* Make tables a bit cleaner */
         .stTable td, .stTable th {
             font-size: 0.85rem;
             padding: 0.3rem 0.5rem;
@@ -144,7 +142,7 @@ def fetch_usd_brl_ptax_previous():
     today = datetime.date.today()
     for i in range(1, 10):
         d = today - datetime.timedelta(days=i)
-        date_str = d.strftime("%m-%d-%Y")  # formato exigido pelo serviço PTAX
+        date_str = d.strftime("%m-%d-%Y")
         url = (
             "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/"
             "CotacaoDolarDia(dataCotacao=@dataCotacao)?"
@@ -155,7 +153,6 @@ def fetch_usd_brl_ptax_previous():
         data = r.json()
         values = data.get("value", [])
         if values:
-            # cotação de venda (BRL por 1 USD)
             rate = float(values[0]["cotacaoVenda"])
             return rate, d
     raise RuntimeError("Não foi possível obter a cotação do dólar nos últimos dias úteis.")
@@ -189,8 +186,8 @@ def generate_pdf_report(
 ):
     """Gera um PDF simples com resumo e itens da simulação."""
     pdf = FPDF()
-    # Important: ensure encoding supports acentos (Windows-1252)
-    pdf.set_doc_option("core_fonts_encoding", "windows-1252")
+    # Ensure encoding supports Portuguese accents
+    pdf.core_fonts_encoding = "windows-1252"
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -215,7 +212,6 @@ def generate_pdf_report(
     pdf.cell(0, 5, f"Modal: {modal_label}", ln=True)
     pdf.cell(0, 5, f"Equipamento: {cfg.mode}", ln=True)
     pdf.cell(0, 5, f"Incoterm: {incoterm}", ln=True)
-    # Remove arrow char to avoid encoding issues
     pdf.cell(0, 5, f"Câmbio USD/BRL: {cfg.fx_rate_usd_brl:.4f}", ln=True)
     pdf.cell(0, 5, f"Frete internacional (USD): {frete_usd:,.2f}", ln=True)
     pdf.cell(0, 5, f"Transporte rodoviário até o destino (R$): {transporte_rodoviario_brl:,.2f}", ln=True)
@@ -311,8 +307,12 @@ def generate_pdf_report(
             "substitui análise fiscal específica do cliente).",
         )
 
-    # Retorna bytes do PDF
-    pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    # Return bytes (compatible with different fpdf2 versions)
+    out = pdf.output(dest="S")
+    if isinstance(out, (bytes, bytearray)):
+        pdf_bytes = bytes(out)
+    else:
+        pdf_bytes = out.encode("latin-1")
     return pdf_bytes
 
 
@@ -386,7 +386,6 @@ with st.container():
             index=1,
             help="Usado para definir se a importação gera créditos (tratado como mercadorias para revenda/industrialização).",
         )
-        # Internamente, tratamos ambos como 'resale'
         purpose = "resale"
 
     # Row 3: Equipamento (tipo de embarque) | Incoterm
@@ -461,7 +460,7 @@ with st.container():
                 f"{st.session_state['ptax_error']}"
             )
 
-    # Advanced cost adjustments: EXW uplift, LCL extra handling, logistics agent fee
+    # Advanced cost adjustments
     with st.expander("Ajustes avançados de custos (opcional)"):
         exw_extra_origin_usd = st.number_input(
             "Ajuste EXW → FOB (USD por embarque)",
@@ -526,7 +525,6 @@ with st.container():
             )
 
         with st.form("add_item_form"):
-            # Linha 1: código / nome interno do produto
             col_prod, = st.columns(1)
             with col_prod:
                 product_ref = st.text_input(
@@ -534,7 +532,6 @@ with st.container():
                     help="Ex.: MV150-ZN-450, Bolsa Neo Preta, etc. Apenas para seu controle.",
                 )
 
-            # Linha 2: NCM + busca
             col_ncm, col_desc = st.columns([1, 1.2])
             with col_ncm:
                 ncm_input = st.text_input(
@@ -548,7 +545,6 @@ with st.container():
                     help="Use palavras-chave do TEC/TIPI (ex.: 'assento', 'bolsas', 'corrediças').",
                 )
 
-            # Linha 3: quantidade + FOB unitário
             col_qtd, col_fob = st.columns(2)
             with col_qtd:
                 quantidade = st.number_input(
@@ -570,18 +566,15 @@ with st.container():
 
             matches = pd.DataFrame()
 
-            # Busca por NCM (prefixo de dígitos)
             if ncm_input.strip():
                 digits = normalize_ncm_search(ncm_input)
                 if digits is not None and "digits" in NCM_TABLE.columns:
                     tmp = NCM_TABLE.copy()
                     tmp = tmp[tmp["digits"].str.startswith(digits)]
-                    # apenas códigos finais (8 dígitos)
                     if "digits_len" in tmp.columns:
                         tmp = tmp[tmp["digits_len"] == 8]
                     matches = tmp
 
-            # Ou busca por descrição
             elif search_hint.strip():
                 tokens = [t for t in search_hint.lower().split() if t]
                 df_search = NCM_TABLE.copy()
@@ -595,7 +588,6 @@ with st.container():
                     matches = tmp
 
             if not matches.empty:
-                # ordenar por NCM completo
                 sort_cols = ["NCM_dotted"]
                 matches = matches.sort_values(sort_cols).head(80)
                 option_indices = matches.index.tolist()
@@ -642,7 +634,6 @@ with st.container():
                 else:
                     row = matches.loc[selected_idx]
 
-                    # Apenas NCMs de 8 dígitos já foram filtrados
                     ncm_final = str(row.get("NCM_dotted", "")).strip()
 
                     ii_rate = row.get("II_rate", 0.0)
@@ -653,9 +644,8 @@ with st.container():
                     if pd.isna(ipi_rate):
                         ipi_rate = 0.0
 
-                    # PIS/COFINS padrão importação (pode ser refinado por NCM no futuro)
-                    pis_rate = 0.021     # 2,1%
-                    cofins_rate = 0.0965  # 9,65%
+                    pis_rate = 0.021
+                    cofins_rate = 0.0965
 
                     new_item = {
                         "NCM": ncm_final,
@@ -666,7 +656,7 @@ with st.container():
                         "IPI_rate": float(ipi_rate),
                         "PIS_rate": float(pis_rate),
                         "COFINS_rate": float(cofins_rate),
-                        "ICMS_rate": 0.0,  # será substituído pela alíquota interna da configuração
+                        "ICMS_rate": 0.0,
                     }
 
                     st.session_state["items_df"] = pd.concat(
@@ -678,14 +668,12 @@ with st.container():
                         f"Item '{product_ref.strip()}' com NCM {ncm_final} adicionado à simulação."
                     )
 
-    # Itens adicionados – visão em lista (sem cara de Excel)
     st.markdown("#### Itens adicionados")
 
     items_df = st.session_state["items_df"]
     if items_df.empty:
         st.info("Nenhum item adicionado ainda.")
     else:
-        # calcular FOB total por item para exibir
         tmp = items_df.copy()
         tmp["FOB_Total_USD"] = tmp["FOB_Unit_USD"] * tmp["Quantity"]
         display_items = tmp[["Description", "NCM", "Quantity", "FOB_Unit_USD", "FOB_Total_USD"]]
@@ -732,7 +720,6 @@ with st.container():
         else:
             clean_df = items_df.copy()
 
-            # Garantir tipos numéricos
             for col in [
                 "Quantity",
                 "FOB_Unit_USD",
@@ -746,10 +733,8 @@ with st.container():
                     clean_df[col] = 0.0
                 clean_df[col] = clean_df[col].fillna(0.0).astype(float)
 
-            # ICMS por item = alíquota interna do estado (por enquanto)
             clean_df["ICMS_rate"] = float(icms_aliq)
 
-            # AFRMM: 8% sobre o frete para marítimo; 0 para aéreo
             if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
                 afrmm_pct = 0.08
                 modal_label = "Marítimo (AFRMM 8%)"
@@ -757,31 +742,26 @@ with st.container():
                 afrmm_pct = 0.0
                 modal_label = "Aéreo (sem AFRMM)"
 
-            # Incoterm: define frete efetivo na base de cálculo
             if incoterm == "CIF":
                 effective_freight_usd = 0.0
             else:
                 effective_freight_usd = frete_usd
 
-            # EXW → FOB uplift: custos de origem só se Incoterm for EXW
             if incoterm == "EXW":
                 origin_charges_usd = exw_extra_origin_usd
             else:
                 origin_charges_usd = 0.0
 
-            # LCL extra handling no destino
             if equipamento == "LCL":
                 local_port_costs_brl = lcl_extra_dest_brl
             else:
                 local_port_costs_brl = 0.0
 
-            # Seguro: 0,10% ad valorem sobre o FOB total (cálculo feito em calculations.py)
             insurance_usd = 0.0
-            insurance_pct = 0.001  # 0,1%
+            insurance_pct = 0.001
 
             thc_origin_usd = 0.0
 
-            # Serviços do agente de carga (Anderson, etc.)
             other_local_costs_brl = logistics_agent_fee_brl
 
             siscomex_brl = 154.23
@@ -810,7 +790,6 @@ with st.container():
 
             per_item, summary = compute_landed_cost(clean_df, cfg)
 
-            # ===== Resumo =====
             st.markdown("#### Resumo do embarque")
 
             fob_total_brl = summary.get("FOB_total_BRL", 0.0)
@@ -820,7 +799,6 @@ with st.container():
             frete_total_brl = summary.get("Freight_total_BRL", 0.0)
             custo_final_brl = summary.get("Final_cost_BRL", 0.0)
 
-            # Multiplicador = Custo final (R$) / FOB total (USD)
             if fob_total_usd > 0:
                 multiplicador = custo_final_brl / fob_total_usd
             else:
@@ -836,7 +814,6 @@ with st.container():
                 st.metric("Custo final (R$)", f"{custo_final_brl:,.2f}")
                 st.metric("Multiplicador", f"{multiplicador:,.2f}x")
 
-            # Texto explicando créditos + modal/incoterm
             if regime == "simples":
                 credit_text = (
                     "Créditos considerados: **nenhum**. "
@@ -847,7 +824,7 @@ with st.container():
                     "Créditos considerados: **IPI e ICMS** sobre mercadorias para revenda/industrialização. "
                     "PIS e COFINS são tratados como cumulativos, sem crédito (modelo simplificado)."
                 )
-            else:  # lucro real
+            else:
                 credit_text = (
                     "Créditos considerados: **IPI, PIS, COFINS e ICMS** sobre mercadorias para revenda/industrialização "
                     "(modelo simplificado de regime não cumulativo)."
@@ -859,7 +836,6 @@ with st.container():
                 unsafe_allow_html=True,
             )
 
-            # ===== Custo por produto (tabela simples) =====
             st.markdown("#### Custo por produto")
 
             simple_cols = [
@@ -879,7 +855,6 @@ with st.container():
             )
             st.table(simple_df)
 
-            # ===== PDF output =====
             items_for_pdf = clean_df.copy()
             if "Unit_Cost_BRL" in per_item.columns and len(per_item) == len(clean_df):
                 items_for_pdf["Unit_Cost_BRL"] = per_item["Unit_Cost_BRL"].values
@@ -909,7 +884,6 @@ with st.container():
                 mime="application/pdf",
             )
 
-            # ===== Detalhes fiscais por item (expander) =====
             with st.expander("Ver detalhes fiscais por item"):
                 cols_to_show = [
                     "Description",
@@ -946,6 +920,7 @@ with st.container():
                     }
                 )
 
-                st.dataframe(display_df, use_container_width=True)
+                # use_container_width deprecation fix
+                st.dataframe(display_df, width="stretch")
 
     st.markdown("</div>", unsafe_allow_html=True)
