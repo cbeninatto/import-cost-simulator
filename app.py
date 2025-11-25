@@ -18,65 +18,128 @@ st.set_page_config(
 )
 
 # =========================
-# Global styling (high-contrast, light, sleek cards)
+# Theme CSS definitions
 # =========================
-st.markdown(
-    """
-    <style>
-        body {
-            background-color: #e5e7eb;
-        }
-        .block-container {
-            padding-top: 1.2rem;
-            padding-bottom: 3rem;
-            max-width: 1100px;
-            margin: 0 auto;
-        }
-        .step-card {
-            background: #ffffff;
-            border-radius: 12px;
-            padding: 1.1rem 1.3rem;
-            border: 1px solid #d1d5db;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
-            margin-bottom: 0.85rem;
-        }
-        .step-title {
-            font-size: 0.8rem;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            font-weight: 600;
-            color: #3b82f6;
-            margin-bottom: 0.15rem;
-        }
-        .section-heading {
-            font-size: 1.15rem;
-            font-weight: 600;
-            color: #111827;
-            margin-bottom: 0.35rem;
-        }
-        .section-subtitle {
-            font-size: 0.85rem;
-            color: #6b7280;
-            margin-bottom: 0.75rem;
-        }
-        .small-muted {
-            font-size: 0.8rem;
-            color: #6b7280;
-        }
-        div[data-testid="stMetric"] {
-            padding-top: 0.25rem;
-            padding-bottom: 0.25rem;
-        }
-        .stTable td, .stTable th {
-            font-size: 0.85rem;
-            padding: 0.3rem 0.5rem;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
+LIGHT_THEME_CSS = """
+<style>
+    body {
+        background-color: #f3f4f6;
+    }
+    .block-container {
+        padding-top: 1.0rem;
+        padding-bottom: 3rem;
+        max-width: 1100px;
+        margin: 0 auto;
+    }
+    .step-card {
+        background: transparent;
+        border-radius: 0;
+        padding: 0.4rem 0 0.8rem 0;
+        border-top: 2px solid #111827;
+        margin-bottom: 0.8rem;
+    }
+    .step-title {
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-weight: 600;
+        color: #3b82f6;
+        margin-bottom: 0.05rem;
+    }
+    .section-heading {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #111827;
+        margin-bottom: 0.15rem;
+    }
+    .section-subtitle {
+        font-size: 0.84rem;
+        color: #6b7280;
+        margin-bottom: 0.5rem;
+    }
+    .small-muted {
+        font-size: 0.8rem;
+        color: #6b7280;
+    }
+    div[data-testid="stMetric"] {
+        padding-top: 0.15rem;
+        padding-bottom: 0.15rem;
+    }
+    .stTable td, .stTable th {
+        font-size: 0.85rem;
+        padding: 0.3rem 0.5rem;
+    }
+</style>
+"""
+
+DARK_THEME_CSS = """
+<style>
+    body {
+        background-color: #020617;
+        color: #e5e7eb;
+    }
+    .block-container {
+        padding-top: 1.0rem;
+        padding-bottom: 3rem;
+        max-width: 1100px;
+        margin: 0 auto;
+    }
+    .step-card {
+        background: transparent;
+        border-radius: 0;
+        padding: 0.4rem 0 0.8rem 0;
+        border-top: 2px solid #38bdf8;
+        margin-bottom: 0.8rem;
+    }
+    .step-title {
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-weight: 600;
+        color: #38bdf8;
+        margin-bottom: 0.05rem;
+    }
+    .section-heading {
+        font-size: 1.05rem;
+        font-weight: 600;
+        color: #e5e7eb;
+        margin-bottom: 0.15rem;
+    }
+    .section-subtitle {
+        font-size: 0.84rem;
+        color: #9ca3af;
+        margin-bottom: 0.5rem;
+    }
+    .small-muted {
+        font-size: 0.8rem;
+        color: #9ca3af;
+    }
+    div[data-testid="stMetric"] {
+        padding-top: 0.15rem;
+        padding-bottom: 0.15rem;
+    }
+    .stTable td, .stTable th {
+        font-size: 0.85rem;
+        padding: 0.3rem 0.5rem;
+    }
+</style>
+"""
+
+# =========================
+# Title & theme toggle
+# =========================
+st.title("📦 Simulador de Custo de Importação")
+
+dark_mode = st.toggle(
+    "Modo escuro",
+    value=False,
+    help="Alterne entre tema claro e escuro."
 )
 
-st.title("📦 Simulador de Custo de Importação")
+if dark_mode:
+    st.markdown(DARK_THEME_CSS, unsafe_allow_html=True)
+else:
+    st.markdown(LIGHT_THEME_CSS, unsafe_allow_html=True)
 
 st.markdown(
     "Calcule o **custo Brasil** de um embarque com vários produtos, "
@@ -186,7 +249,7 @@ def generate_pdf_report(
 ):
     """Gera um PDF simples com resumo e itens da simulação."""
     pdf = FPDF()
-    # Ensure encoding supports Portuguese accents
+    # Ensure encoding supports Portuguese accents (CP1252)
     pdf.core_fonts_encoding = "windows-1252"
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -214,13 +277,23 @@ def generate_pdf_report(
     pdf.cell(0, 5, f"Incoterm: {incoterm}", ln=True)
     pdf.cell(0, 5, f"Câmbio USD/BRL: {cfg.fx_rate_usd_brl:.4f}", ln=True)
     pdf.cell(0, 5, f"Frete internacional (USD): {frete_usd:,.2f}", ln=True)
-    pdf.cell(0, 5, f"Transporte rodoviário até o destino (R$): {transporte_rodoviario_brl:,.2f}", ln=True)
+    pdf.cell(
+        0,
+        5,
+        f"Transporte rodoviário até o destino (R$): {transporte_rodoviario_brl:,.2f}",
+        ln=True,
+    )
     if exw_extra_origin_usd > 0:
         pdf.cell(0, 5, f"Ajuste EXW para FOB (USD): {exw_extra_origin_usd:,.2f}", ln=True)
     if lcl_extra_dest_brl > 0:
         pdf.cell(0, 5, f"Taxas adicionais LCL no destino (R$): {lcl_extra_dest_brl:,.2f}", ln=True)
     if logistics_agent_fee_brl > 0:
-        pdf.cell(0, 5, f"Serviços do agente de carga (R$): {logistics_agent_fee_brl:,.2f}", ln=True)
+        pdf.cell(
+            0,
+            5,
+            f"Serviços do agente de carga (R$): {logistics_agent_fee_brl:,.2f}",
+            ln=True,
+        )
 
     pdf.ln(4)
 
@@ -247,7 +320,12 @@ def generate_pdf_report(
     pdf.cell(0, 5, f"Impostos totais (R$): {impostos_totais:,.2f}", ln=True)
     pdf.cell(0, 5, f"Créditos de impostos (R$): {creditos_totais:,.2f}", ln=True)
     pdf.cell(0, 5, f"Custo final (R$): {custo_final_brl:,.2f}", ln=True)
-    pdf.cell(0, 5, f"Multiplicador (Custo final / FOB USD): {multiplicador:,.2f}x", ln=True)
+    pdf.cell(
+        0,
+        5,
+        f"Multiplicador (Custo final / FOB USD): {multiplicador:,.2f}x",
+        ln=True,
+    )
 
     pdf.ln(4)
 
@@ -277,7 +355,7 @@ def generate_pdf_report(
         pdf.cell(30, 6, f"{fob_unit:,.2f}", border=1, align="R")
         pdf.cell(30, 6, f"{unit_cost:,.2f}", border=1, ln=True, align="R")
 
-    # Observações regime/creditos
+    # Observações regime/créditos
     pdf.ln(4)
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(0, 6, "Observações sobre créditos de impostos:", ln=True)
@@ -317,7 +395,7 @@ def generate_pdf_report(
 
 
 # =========================
-# STEP 1 – SHIPMENT CONFIG (aligned rows)
+# STEP 1 – SHIPMENT CONFIG
 # =========================
 with st.container():
     st.markdown('<div class="step-card">', unsafe_allow_html=True)
@@ -386,6 +464,7 @@ with st.container():
             index=1,
             help="Usado para definir se a importação gera créditos (tratado como mercadorias para revenda/industrialização).",
         )
+        # For now, we always treat as resale/industrialization for credits logic
         purpose = "resale"
 
     # Row 3: Equipamento (tipo de embarque) | Incoterm
@@ -891,7 +970,7 @@ with st.container():
                     "NCM",
                     "Quantity",
                     "FOB_Total_BRL",
-                    "CIF_BRL",             # will only appear if your calculations.py provides it
+                    "CIF_BRL",
                     "II_BRL",
                     "IPI_BRL",
                     "PIS_BRL",
