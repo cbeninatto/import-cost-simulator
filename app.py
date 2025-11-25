@@ -574,7 +574,7 @@ with st.container():
             )
 
     # Ajustes avançados (não colapsados)
-    st.markdown("##### Ajustes avançados de custos (opcional)")
+    st.markdown("##### Ajustes avançados de custos")
     exw_extra_origin_usd = st.number_input(
         "Ajuste EXW → FOB (USD por embarque)",
         value=300.0,
