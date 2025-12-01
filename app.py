@@ -114,78 +114,6 @@ def load_logo_svg() -> str | None:
         return None
 
 
-# =========================
-# Header with logo
-# =========================
-
-logo_svg = load_logo_svg()
-
-if logo_svg:
-    header_html = f"""
-    <div class="app-header">
-        <div class="app-logo">
-            {logo_svg}
-        </div>
-        <div class="app-title">
-            <span class="app-title-emoji">📦</span>
-            <span class="app-title-text">Simulador de Custo de Importação</span>
-        </div>
-    </div>
-    """
-else:
-    header_html = """
-    <div class="app-header">
-        <div class="app-title">
-            <span class="app-title-emoji">📦</span>
-            <span class="app-title-text">Simulador de Custo de Importação</span>
-        </div>
-    </div>
-    """
-
-st.markdown(header_html, unsafe_allow_html=True)
-
-st.markdown(
-    "Simule o custo Brasil completo de um embarque com vários produtos."
-)
-
-# =========================
-# Load NCM / II / IPI table
-# =========================
-LOAD_ERROR = None
-try:
-    NCM_TABLE = load_ncm_tec_table()
-except Exception as e:
-    NCM_TABLE = None
-    LOAD_ERROR = repr(e)
-
-# =========================
-# Session state
-# =========================
-if "items_df" not in st.session_state:
-    st.session_state["items_df"] = pd.DataFrame(
-        columns=[
-            "NCM",
-            "Description",      # product name / code (user reference)
-            "Quantity",
-            "FOB_Unit_USD",
-            "II_rate",
-            "IPI_rate",
-            "PIS_rate",
-            "COFINS_rate",
-            "ICMS_rate",
-        ]
-    )
-
-if "cambio_input" not in st.session_state:
-    st.session_state["cambio_input"] = 5.50
-
-if "cambio_date" not in st.session_state:
-    st.session_state["cambio_date"] = ""
-
-if "ptax_error" not in st.session_state:
-    st.session_state["ptax_error"] = ""
-
-
 def normalize_ncm_search(value: str):
     """
     Normalize user input for NCM (0000.00.00, 00000000 or partial).
@@ -233,6 +161,200 @@ def set_ptax_rate():
         st.session_state["ptax_error"] = ""
     except Exception as e:
         st.session_state["ptax_error"] = str(e)
+
+
+def prepare_items_df_for_calc(items_df: pd.DataFrame, icms_aliq: float) -> pd.DataFrame:
+    """
+    Normaliza o DataFrame de itens para o cálculo (tipos numéricos e ICMS_rate).
+    """
+    clean_df = items_df.copy()
+    for col in [
+        "Quantity",
+        "FOB_Unit_USD",
+        "II_rate",
+        "IPI_rate",
+        "PIS_rate",
+        "COFINS_rate",
+        "ICMS_rate",
+    ]:
+        if col not in clean_df.columns:
+            clean_df[col] = 0.0
+        clean_df[col] = clean_df[col].fillna(0.0).astype(float)
+
+    clean_df["ICMS_rate"] = float(icms_aliq)
+    return clean_df
+
+
+def build_shipment_config(
+    estado_destino: str,
+    equipamento: str,
+    incoterm: str,
+    cambio: float,
+    frete_usd: float,
+    exw_extra_origin_usd: float,
+    lcl_extra_dest_brl: float,
+    transporte_rodoviario_brl: float,
+    logistics_agent_fee_brl: float,
+    icms_aliq: float,
+    purpose: str,
+    allocation_method: str,
+) -> tuple[ShipmentConfig, str]:
+    """
+    Constrói ShipmentConfig a partir das entradas da interface,
+    retornando também o rótulo de modal para exibição.
+    """
+    # Modal / AFRMM
+    if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
+        afrmm_pct = 0.08
+        modal_label = "Marítimo (AFRMM 8%)"
+    else:
+        afrmm_pct = 0.0
+        modal_label = "Aéreo (sem AFRMM)"
+
+    # Frete efetivo (CIF ignora frete informado)
+    if incoterm == "CIF":
+        effective_freight_usd = 0.0
+    else:
+        effective_freight_usd = frete_usd
+
+    # Custos de origem extras (EXW)
+    if incoterm == "EXW":
+        origin_charges_usd = exw_extra_origin_usd
+    else:
+        origin_charges_usd = 0.0
+
+    # Custos locais extras no destino (LCL)
+    if equipamento == "LCL":
+        local_port_costs_brl = lcl_extra_dest_brl
+    else:
+        local_port_costs_brl = 0.0
+
+    # Seguro padrão ad valorem (se não informado)
+    insurance_usd = 0.0
+    insurance_pct = 0.001
+
+    thc_origin_usd = 0.0
+
+    other_local_costs_brl = logistics_agent_fee_brl
+
+    siscomex_brl = 154.23
+
+    cfg = ShipmentConfig(
+        state_destination=estado_destino,
+        mode=equipamento,
+        fx_rate_usd_brl=cambio,
+        freight_international_usd=effective_freight_usd,
+        insurance_usd=insurance_usd,
+        insurance_pct=insurance_pct,
+        origin_charges_usd=origin_charges_usd,
+        thc_origin_usd=thc_origin_usd,
+        afrmm_pct=afrmm_pct,
+        siscomex_brl=siscomex_brl,
+        local_port_costs_brl=local_port_costs_brl,
+        trucking_brl=transporte_rodoviario_brl,
+        other_local_costs_brl=other_local_costs_brl,
+        regime=regime,  # regime é global, já mapeado abaixo
+        purpose=purpose,
+        icms_rate=icms_aliq,
+        da_components=["afrmm", "siscomex"],
+        va_components=["freight", "insurance", "origin_charges", "thc_origin"],
+        allocation_method=allocation_method,
+    )
+    return cfg, modal_label
+
+
+def solve_fob_target_for_item(
+    item_idx: int,
+    target_unit_cost_brl: float,
+    base_items_df: pd.DataFrame,
+    cfg: ShipmentConfig,
+    icms_aliq: float,
+    max_iter: int = 35,
+    tol: float = 0.01,
+):
+    """
+    Faz cálculo reverso para encontrar o FOB unitário (USD) necessário
+    para que o item `item_idx` atinja `target_unit_cost_brl` (R$) de custo unitário.
+
+    Retorna dict com:
+      - status: "ok" | "too_low" | "too_high"
+      - fob_exact
+      - min_cost
+      - cost_at_current
+    """
+    # Segurança básica
+    if base_items_df.empty:
+        return {"status": "empty"}
+
+    # Custo mínimo possível (FOB = 0)
+    base_df_zero = prepare_items_df_for_calc(base_items_df, icms_aliq)
+    base_df_zero.iloc[item_idx, base_df_zero.columns.get_loc("FOB_Unit_USD")] = 0.0
+    per_zero, _ = compute_landed_cost(base_df_zero, cfg)
+    min_cost = float(per_zero.iloc[item_idx]["Unit_Cost_BRL"])
+
+    # Custo com FOB atual (para referência)
+    current_fob = float(base_items_df.iloc[item_idx]["FOB_Unit_USD"])
+    base_df_current = prepare_items_df_for_calc(base_items_df, icms_aliq)
+    per_cur, _ = compute_landed_cost(base_df_current, cfg)
+    cost_at_current = float(per_cur.iloc[item_idx]["Unit_Cost_BRL"])
+
+    if target_unit_cost_brl < min_cost - tol:
+        # Nem com FOB zero chega nesse custo (custo está "abaixo do mínimo")
+        return {
+            "status": "too_low",
+            "min_cost": min_cost,
+            "cost_at_current": cost_at_current,
+        }
+
+    # Função auxiliar: custo unitário para dado FOB
+    def unit_cost_for_fob(fob_value: float) -> float:
+        df = prepare_items_df_for_calc(base_items_df, icms_aliq)
+        df.iloc[item_idx, df.columns.get_loc("FOB_Unit_USD")] = fob_value
+        per, _ = compute_landed_cost(df, cfg)
+        return float(per.iloc[item_idx]["Unit_Cost_BRL"])
+
+    # Encontrar um intervalo [0, high] que cubra o target
+    low = 0.0
+    high = max(current_fob, 1.0)
+    cost_high = unit_cost_for_fob(high)
+
+    # Se custo com high ainda abaixo do target, aumenta high progressivamente
+    expand_steps = 0
+    while cost_high < target_unit_cost_brl and expand_steps < 20:
+        high *= 2
+        cost_high = unit_cost_for_fob(high)
+        expand_steps += 1
+
+    if cost_high < target_unit_cost_brl:
+        # Até com FOB absurdamente alto o custo não atinge o target (caso raro)
+        return {
+            "status": "too_high",
+            "min_cost": min_cost,
+            "cost_at_current": cost_at_current,
+        }
+
+    # Busca binária em [low, high]
+    best_fob = high
+    for _ in range(max_iter):
+        mid = (low + high) / 2.0
+        cost_mid = unit_cost_for_fob(mid)
+
+        if abs(cost_mid - target_unit_cost_brl) <= tol:
+            best_fob = mid
+            break
+
+        if cost_mid < target_unit_cost_brl:
+            low = mid
+        else:
+            best_fob = mid
+            high = mid
+
+    return {
+        "status": "ok",
+        "fob_exact": best_fob,
+        "min_cost": min_cost,
+        "cost_at_current": cost_at_current,
+    }
 
 
 def generate_pdf_report(
@@ -419,6 +541,75 @@ def generate_pdf_report(
     else:
         pdf_bytes = out.encode("latin-1")
     return pdf_bytes
+
+
+# =========================
+# Header with logo
+# =========================
+
+logo_svg = load_logo_svg()
+
+if logo_svg:
+    header_html = f"""
+    <div class="app-header">
+        <div class="app-logo">
+            {logo_svg}
+        </div>
+        <div class="app-title">
+            <span class="app-title-emoji">📦</span>
+            <span class="app-title-text">Simulador de Custo de Importação</span>
+        </div>
+    </div>
+    """
+else:
+    header_html = """
+    <div class="app-header">
+        <div class="app-title">
+            <span class="app-title-emoji">📦</span>
+            <span class="app-title-text">Simulador de Custo de Importação</span>
+        </div>
+    </div>
+    """
+
+st.markdown(header_html, unsafe_allow_html=True)
+st.markdown("Simule o custo Brasil completo de um embarque com vários produtos.")
+
+# =========================
+# Load NCM / II / IPI table
+# =========================
+LOAD_ERROR = None
+try:
+    NCM_TABLE = load_ncm_tec_table()
+except Exception as e:
+    NCM_TABLE = None
+    LOAD_ERROR = repr(e)
+
+# =========================
+# Session state
+# =========================
+if "items_df" not in st.session_state:
+    st.session_state["items_df"] = pd.DataFrame(
+        columns=[
+            "NCM",
+            "Description",      # product name / code (user reference)
+            "Quantity",
+            "FOB_Unit_USD",
+            "II_rate",
+            "IPI_rate",
+            "PIS_rate",
+            "COFINS_rate",
+            "ICMS_rate",
+        ]
+    )
+
+if "cambio_input" not in st.session_state:
+    st.session_state["cambio_input"] = 5.50
+
+if "cambio_date" not in st.session_state:
+    st.session_state["cambio_date"] = ""
+
+if "ptax_error" not in st.session_state:
+    st.session_state["ptax_error"] = ""
 
 
 # =========================
@@ -724,7 +915,6 @@ with st.container():
                     ipi_pct = f"{ipi * 100:.1f}%"
                 except Exception:
                     ipi_pct = "-"
-
                 return f"{code}  {desc}  • II {ii_pct}  |  IPI {ipi_pct}"
 
             selected_idx = st.selectbox(
@@ -791,280 +981,3 @@ with st.container():
         tmp = items_df.copy()
         tmp["FOB_Total_USD"] = tmp["FOB_Unit_USD"] * tmp["Quantity"]
         display_items = tmp[["Description", "NCM", "Quantity", "FOB_Unit_USD", "FOB_Total_USD"]]
-
-        display_items = display_items.rename(
-            columns={
-                "Description": "Produto",
-                "Quantity": "Qtd.",
-                "FOB_Unit_USD": "FOB unit. (USD)",
-                "FOB_Total_USD": "FOB total (USD)",
-            }
-        )
-
-        st.table(display_items)
-
-        # Remover item específico
-        if not items_df.empty:
-            labels = []
-            for i, row in items_df.iterrows():
-                labels.append(f"{i+1} – {row.get('Description', '')} (NCM {row.get('NCM', '')})")
-            idx_choice = st.selectbox(
-                "Selecione um item para remover",
-                options=list(range(len(labels))),
-                format_func=lambda i: labels[i],
-                key="remove_item_select",
-            )
-            if st.button("Remover item selecionado", key="remove_item_button"):
-                idx_to_drop = items_df.index[idx_choice]
-                st.session_state["items_df"] = items_df.drop(idx_to_drop).reset_index(drop=True)
-                st.success("Item removido da simulação.")
-
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            if st.button("🧹 Limpar todos os itens"):
-                st.session_state["items_df"] = st.session_state["items_df"].iloc[0:0].copy()
-        with col_r2:
-            st.write("")  # spacer
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# =========================
-# STEP 3 – RESULTS
-# =========================
-with st.container():
-    st.markdown('<div class="step-card">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="step-title">Passo 3</div>'
-        '<div class="section-heading">Resultados</div>'
-        '<div class="section-subtitle">Resumo do embarque e custo por produto.</div>',
-        unsafe_allow_html=True,
-    )
-
-    if st.button("Calcular custo de importação"):
-        items_df = st.session_state["items_df"]
-
-        if items_df.empty:
-            st.warning("Adicione pelo menos um item à simulação.")
-        else:
-            clean_df = items_df.copy()
-
-            for col in [
-                "Quantity",
-                "FOB_Unit_USD",
-                "II_rate",
-                "IPI_rate",
-                "PIS_rate",
-                "COFINS_rate",
-                "ICMS_rate",
-            ]:
-                if col not in clean_df.columns:
-                    clean_df[col] = 0.0
-                clean_df[col] = clean_df[col].fillna(0.0).astype(float)
-
-            clean_df["ICMS_rate"] = float(icms_aliq)
-
-            if equipamento.lower() in ["fcl_20", "fcl_40", "lcl"]:
-                afrmm_pct = 0.08
-                modal_label = "Marítimo (AFRMM 8%)"
-            else:
-                afrmm_pct = 0.0
-                modal_label = "Aéreo (sem AFRMM)"
-
-            if incoterm == "CIF":
-                effective_freight_usd = 0.0
-            else:
-                effective_freight_usd = frete_usd
-
-            if incoterm == "EXW":
-                origin_charges_usd = exw_extra_origin_usd
-            else:
-                origin_charges_usd = 0.0
-
-            if equipamento == "LCL":
-                local_port_costs_brl = lcl_extra_dest_brl
-            else:
-                local_port_costs_brl = 0.0
-
-            insurance_usd = 0.0
-            insurance_pct = 0.001
-
-            thc_origin_usd = 0.0
-
-            other_local_costs_brl = logistics_agent_fee_brl
-
-            siscomex_brl = 154.23
-
-            cfg = ShipmentConfig(
-                state_destination=estado_destino,
-                mode=equipamento,
-                fx_rate_usd_brl=cambio,
-                freight_international_usd=effective_freight_usd,
-                insurance_usd=insurance_usd,
-                insurance_pct=insurance_pct,
-                origin_charges_usd=origin_charges_usd,
-                thc_origin_usd=thc_origin_usd,
-                afrmm_pct=afrmm_pct,
-                siscomex_brl=siscomex_brl,
-                local_port_costs_brl=local_port_costs_brl,
-                trucking_brl=transporte_rodoviario_brl,
-                other_local_costs_brl=other_local_costs_brl,
-                regime=regime,
-                purpose=purpose,
-                icms_rate=icms_aliq,
-                da_components=["afrmm", "siscomex"],
-                va_components=["freight", "insurance", "origin_charges", "thc_origin"],
-                allocation_method=allocation_method,
-            )
-
-            per_item, summary = compute_landed_cost(clean_df, cfg)
-
-            st.markdown("#### Resumo do embarque")
-
-            fob_total_brl = summary.get("FOB_total_BRL", 0.0)
-            fob_total_usd = summary.get("FOB_total_USD", 0.0)
-            impostos_totais = summary.get("Tax_paid_total_BRL", 0.0)
-            creditos_totais = summary.get("Tax_credit_total_BRL", 0.0)
-            frete_total_brl = summary.get("Freight_total_BRL", 0.0)
-            custo_final_brl = summary.get("Final_cost_BRL", 0.0)
-
-            if fob_total_usd > 0:
-                multiplicador = custo_final_brl / fob_total_usd
-            else:
-                multiplicador = 0.0
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("FOB total (R$)", f"{fob_total_brl:,.2f}")
-                st.metric("Frete internacional (R$)", f"{frete_total_brl:,.2f}")
-                st.metric("Impostos (R$)", f"{impostos_totais:,.2f}")
-                st.metric("Créditos de impostos (R$)", f"{creditos_totais:,.2f}")
-            with col2:
-                st.metric("Custo final (R$)", f"{custo_final_brl:,.2f}")
-                st.metric("Multiplicador", f"{multiplicador:,.2f}x")
-
-            if regime == "simples":
-                credit_text = (
-                    "Créditos considerados: **nenhum**. "
-                    "Simples Nacional não aproveita créditos de IPI/PIS/COFINS/ICMS nesta simulação."
-                )
-            elif regime == "presumido":
-                credit_text = (
-                    "Créditos considerados: **IPI e ICMS** sobre mercadorias para revenda/industrialização. "
-                    "PIS e COFINS são tratados como cumulativos, sem crédito (modelo simplificado)."
-                )
-            else:
-                credit_text = (
-                    "Créditos considerados: **IPI, PIS, COFINS e ICMS** sobre mercadorias para revenda/industrialização "
-                    "(modelo simplificado de regime não cumulativo)."
-                )
-
-            extra_text = f" Modal: **{modal_label}** • Incoterm: **{incoterm}**."
-            st.markdown(
-                f"<div class='small-muted'>{credit_text}{extra_text}</div>",
-                unsafe_allow_html=True,
-            )
-
-            st.markdown("#### Custo por produto")
-
-            simple_cols = [
-                "Description",
-                "NCM",
-                "Quantity",
-                "Landed_Cost_BRL",
-                "Unit_Cost_BRL",
-            ]
-            simple_df = per_item[simple_cols].rename(
-                columns={
-                    "Description": "Produto",
-                    "Quantity": "Qtd.",
-                    "Landed_Cost_BRL": "Custo total por produto (R$)",
-                    "Unit_Cost_BRL": "Custo unitário por produto (R$)",
-                }
-            )
-            st.table(simple_df)
-
-            items_for_pdf = clean_df.copy()
-            if "Unit_Cost_BRL" in per_item.columns and len(per_item) == len(clean_df):
-                items_for_pdf["Unit_Cost_BRL"] = per_item["Unit_Cost_BRL"].values
-            else:
-                items_for_pdf["Unit_Cost_BRL"] = 0.0
-
-            pdf_bytes = generate_pdf_report(
-                summary=summary,
-                items_df=items_for_pdf,
-                cfg=cfg,
-                regime_label=regime_label,
-                uso_label=uso_label,
-                incoterm=incoterm,
-                modal_label=modal_label,
-                cambio_date=st.session_state.get("cambio_date", ""),
-                frete_usd=frete_usd,
-                transporte_rodoviario_brl=transporte_rodoviario_brl,
-                exw_extra_origin_usd=exw_extra_origin_usd,
-                lcl_extra_dest_brl=lcl_extra_dest_brl,
-                logistics_agent_fee_brl=logistics_agent_fee_brl,
-            )
-
-            st.download_button(
-                "📄 Baixar relatório em PDF",
-                data=pdf_bytes,
-                file_name="simulacao_custo_importacao.pdf",
-                mime="application/pdf",
-            )
-
-            with st.expander("Ver detalhes fiscais por item"):
-                # Columns we'd like to show if they exist
-                cols_to_show = [
-                    "Description",
-                    "NCM",
-                    "Quantity",
-                    "FOB_Total_BRL",
-                    "CIF_BRL",
-                    "II_BRL",
-                    "IPI_BRL",
-                    "PIS_BRL",
-                    "COFINS_BRL",
-                    "ICMS_BRL",
-                    "net_tax_total",
-                    "Landed_Cost_BRL",
-                    "Unit_Cost_BRL",
-                    "Truck_BRL",
-                ]
-
-                # Keep only columns that are actually present in per_item
-                available_cols = [c for c in cols_to_show if c in per_item.columns]
-
-                if not available_cols:
-                    st.info(
-                        "Nenhuma coluna detalhada disponível no resultado. "
-                        "Verifique a implementação de `compute_landed_cost`."
-                    )
-                else:
-                    rename_map = {
-                        "Description": "Produto",
-                        "Quantity": "Qtd.",
-                        "FOB_Total_BRL": "FOB total (R$)",
-                        "CIF_BRL": "Valor Aduaneiro / CIF (R$)",
-                        "II_BRL": "II (R$)",
-                        "IPI_BRL": "IPI (R$)",
-                        "PIS_BRL": "PIS-Importação (R$)",
-                        "COFINS_BRL": "COFINS-Importação (R$)",
-                        "ICMS_BRL": "ICMS (R$)",
-                        "net_tax_total": "Impostos líquidos (R$)",
-                        "Landed_Cost_BRL": "Custo total por produto (R$)",
-                        "Unit_Cost_BRL": "Custo unitário por produto (R$)",
-                        "Truck_BRL": "Transporte rodoviário (R$)",
-                    }
-
-                    effective_rename = {
-                        k: v for k, v in rename_map.items() if k in available_cols
-                    }
-
-                    display_df = per_item[available_cols].rename(
-                        columns=effective_rename
-                    )
-
-                    st.dataframe(display_df, width="stretch")
-
-    st.markdown("</div>", unsafe_allow_html=True)
