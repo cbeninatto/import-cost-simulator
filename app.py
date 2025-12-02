@@ -224,9 +224,7 @@ else:
 
 st.markdown(header_html, unsafe_allow_html=True)
 
-st.markdown(
-    "Simule o custo Brasil completo de um embarque com vários produtos."
-)
+st.markdown("Simule o custo Brasil completo de um embarque com vários produtos.")
 
 # =========================
 # Load NCM / II / IPI table
