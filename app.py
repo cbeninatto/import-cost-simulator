@@ -180,6 +180,7 @@ BASE_CSS = """
 
 st.markdown(BASE_CSS, unsafe_allow_html=True)
 
+
 # =========================
 # Utils
 # =========================
@@ -263,6 +264,23 @@ if "cambio_date" not in st.session_state:
 
 if "ptax_error" not in st.session_state:
     st.session_state["ptax_error"] = ""
+
+# store last calculation for tabs
+calc_keys = [
+    "last_clean_df",
+    "last_per_item",
+    "last_summary",
+    "last_cfg",
+    "last_modal_label",
+    "last_regime_label",
+    "last_uso_label",
+    "last_incoterm",
+    "last_frete_usd",
+    "last_transporte_rodoviario_brl",
+    "last_exw_extra_origin_usd",
+    "last_lcl_extra_dest_brl",
+    "last_logistics_agent_fee_brl",
+]
 
 
 def normalize_ncm_search(value: str):
@@ -718,7 +736,7 @@ with st.container():
                 "Provavelmente há um problema de layout em `combined_taxes.csv`."
             )
 
-        # --- Inputs (no form: Enter won't submit) ---
+        # --- Inputs (no form: Enter won't auto-submit) ---
         col_prod, = st.columns(1)
         with col_prod:
             product_ref = st.text_input(
@@ -902,6 +920,9 @@ with st.container():
         with col_r1:
             if st.button("🧹 Limpar todos os itens"):
                 st.session_state["items_df"] = st.session_state["items_df"].iloc[0:0].copy()
+                # clear last calc too
+                for k in calc_keys + ["reverse_result"]:
+                    st.session_state.pop(k, None)
         with col_r2:
             st.write("")  # spacer
 
@@ -909,22 +930,26 @@ with st.container():
 
 
 # =========================
-# STEP 3 – RESULTS
+# STEP 3 – RESULTS + REVERSE TAB
 # =========================
 with st.container():
     st.markdown('<div class="step-card">', unsafe_allow_html=True)
     st.markdown(
         '<div class="step-title">Passo 3</div>'
         '<div class="section-heading">Resultados</div>'
-        '<div class="section-subtitle">Resumo do embarque e custo por produto.</div>',
+        '<div class="section-subtitle">Resumo do embarque, custo por produto e cálculo reverso de FOB.</div>',
         unsafe_allow_html=True,
     )
 
+    # --- Run calculation on click, store everything in session_state ---
     if st.button("Calcular custo de importação"):
         items_df = st.session_state["items_df"]
 
         if items_df.empty:
             st.warning("Adicione pelo menos um item à simulação.")
+            # clear previous results so we don't show stale data
+            for k in calc_keys + ["reverse_result"]:
+                st.session_state.pop(k, None)
         else:
             clean_df = items_df.copy()
 
@@ -967,11 +992,8 @@ with st.container():
 
             insurance_usd = 0.0
             insurance_pct = 0.001
-
             thc_origin_usd = 0.0
-
             other_local_costs_brl = logistics_agent_fee_brl
-
             siscomex_brl = 154.23
 
             cfg = ShipmentConfig(
@@ -998,6 +1020,43 @@ with st.container():
 
             per_item, summary = compute_landed_cost(clean_df, cfg)
 
+            # store in session for tabs
+            st.session_state["last_clean_df"] = clean_df
+            st.session_state["last_per_item"] = per_item
+            st.session_state["last_summary"] = summary
+            st.session_state["last_cfg"] = cfg
+            st.session_state["last_modal_label"] = modal_label
+            st.session_state["last_regime_label"] = regime_label
+            st.session_state["last_uso_label"] = uso_label
+            st.session_state["last_incoterm"] = incoterm
+            st.session_state["last_frete_usd"] = frete_usd
+            st.session_state["last_transporte_rodoviario_brl"] = transporte_rodoviario_brl
+            st.session_state["last_exw_extra_origin_usd"] = exw_extra_origin_usd
+            st.session_state["last_lcl_extra_dest_brl"] = lcl_extra_dest_brl
+            st.session_state["last_logistics_agent_fee_brl"] = logistics_agent_fee_brl
+
+            st.success("Simulação recalculada. Veja os resultados nas abas abaixo.")
+
+    # --- Show results only if we have a last calculation ---
+    if "last_per_item" in st.session_state and isinstance(st.session_state["last_per_item"], pd.DataFrame):
+        per_item = st.session_state["last_per_item"]
+        summary = st.session_state["last_summary"]
+        clean_df = st.session_state["last_clean_df"]
+        cfg = st.session_state["last_cfg"]
+        modal_label = st.session_state["last_modal_label"]
+        regime_label = st.session_state["last_regime_label"]
+        uso_label = st.session_state["last_uso_label"]
+        incoterm = st.session_state["last_incoterm"]
+        frete_usd = st.session_state["last_frete_usd"]
+        transporte_rodoviario_brl = st.session_state["last_transporte_rodoviario_brl"]
+        exw_extra_origin_usd = st.session_state["last_exw_extra_origin_usd"]
+        lcl_extra_dest_brl = st.session_state["last_lcl_extra_dest_brl"]
+        logistics_agent_fee_brl = st.session_state["last_logistics_agent_fee_brl"]
+
+        tab_main, tab_reverse = st.tabs(["Resumo e custos", "Cálculo reverso (FOB alvo)"])
+
+        # -------- Tab 1: Main results --------
+        with tab_main:
             st.markdown("#### Resumo do embarque")
 
             fob_total_brl = summary.get("FOB_total_BRL", 0.0)
@@ -1022,12 +1081,12 @@ with st.container():
                 st.metric("Custo final (R$)", f"{custo_final_brl:,.2f}")
                 st.metric("Multiplicador", f"{multiplicador:,.2f}x")
 
-            if regime == "simples":
+            if cfg.regime == "simples":
                 credit_text = (
                     "Créditos considerados: **nenhum**. "
                     "Simples Nacional não aproveita créditos de IPI/PIS/COFINS/ICMS nesta simulação."
                 )
-            elif regime == "presumido":
+            elif cfg.regime == "presumido":
                 credit_text = (
                     "Créditos considerados: **IPI e ICMS** sobre mercadorias para revenda/industrialização. "
                     "PIS e COFINS são tratados como cumulativos, sem crédito (modelo simplificado)."
@@ -1063,151 +1122,7 @@ with st.container():
             )
             st.table(simple_df)
 
-            # ------------------------------------------------------
-            # CÁLCULO REVERSO – FOB ALVO POR ITEM
-            # ------------------------------------------------------
-            st.markdown("#### Cálculo reverso: FOB alvo por item")
-
-            if per_item is not None and not per_item.empty:
-                item_indices = list(per_item.index)
-
-                # How each item appears in the dropdown
-                def format_reverse_item(idx):
-                    row = per_item.loc[idx]
-                    desc = str(row.get("Description", ""))
-                    ncm = str(row.get("NCM", ""))
-                    try:
-                        current_fob = float(clean_df.loc[idx, "FOB_Unit_USD"])
-                    except Exception:
-                        current_fob = 0.0
-                    try:
-                        unit_cost_now = float(row.get("Unit_Cost_BRL", 0.0))
-                    except Exception:
-                        unit_cost_now = 0.0
-
-                    short_desc = (desc[:40] + "…") if len(desc) > 40 else desc
-                    return (
-                        f"{idx + 1} – {short_desc} "
-                        f"(NCM {ncm}) • FOB {current_fob:.2f} USD • Custo unit. R$ {unit_cost_now:.2f}"
-                    )
-
-                selected_item_idx = st.selectbox(
-                    "Escolha o item para encontrar o FOB necessário para atingir um custo unitário alvo:",
-                    options=item_indices,
-                    format_func=format_reverse_item,
-                    key="reverse_item_select",
-                )
-
-                # Default target = current unit cost, so user can tweak from there
-                current_unit_cost = float(per_item.loc[selected_item_idx, "Unit_Cost_BRL"])
-                target_unit_brl = st.number_input(
-                    "Custo unitário alvo (R$):",
-                    min_value=0.0,
-                    value=round(current_unit_cost, 2),
-                    step=0.10,
-                    key="reverse_target_unit_cost",
-                )
-
-                rounding_step = st.selectbox(
-                    "Arredondamento do FOB sugerido:",
-                    options=[0.01, 0.05, 0.10, 0.50, 1.00],
-                    index=2,
-                    format_func=lambda x: f"{x:.2f} USD",
-                    key="reverse_round_step",
-                )
-
-                if st.button("Calcular FOB alvo para este item", key="btn_calc_reverse_fob"):
-                    base_df = clean_df.copy()
-                    try:
-                        fob_exact, cost_exact = solve_reverse_fob_for_item(
-                            base_df=base_df,
-                            cfg=cfg,
-                            item_idx=selected_item_idx,
-                            target_unit_brl=target_unit_brl,
-                        )
-
-                        if fob_exact is None:
-                            st.warning(
-                                "Não foi possível encontrar um FOB que alcance esse custo unitário alvo "
-                                "(mesmo com FOB muito alto ou muito baixo)."
-                            )
-                        else:
-                            # Round FOB to something nicer (e.g. 0.10, 0.05, etc.)
-                            if rounding_step > 0:
-                                fob_rounded = round(fob_exact / rounding_step) * rounding_step
-                            else:
-                                fob_rounded = fob_exact
-
-                            # Compute cost using the rounded FOB
-                            df_rounded = base_df.copy()
-                            df_rounded.loc[selected_item_idx, "FOB_Unit_USD"] = fob_rounded
-                            per_rounded, _ = compute_landed_cost(df_rounded, cfg)
-                            cost_rounded = float(per_rounded.loc[selected_item_idx, "Unit_Cost_BRL"])
-
-                            # Store in session so we can offer an "Apply" button
-                            st.session_state["reverse_result"] = {
-                                "item_idx": int(selected_item_idx),
-                                "fob_exact": float(fob_exact),
-                                "fob_rounded": float(fob_rounded),
-                                "target_unit_brl": float(target_unit_brl),
-                                "achieved_unit_brl": float(cost_rounded),
-                            }
-
-                    except Exception as e:
-                        st.error(f"Erro no cálculo reverso de FOB: {e}")
-
-                # If we have a stored reverse calculation, show a little summary + apply option
-                if "reverse_result" in st.session_state:
-                    res = st.session_state["reverse_result"]
-                    idx = res["item_idx"]
-
-                    if idx in per_item.index and idx in clean_df.index:
-                        row = per_item.loc[idx]
-                        desc = str(row.get("Description", ""))
-                        ncm = str(row.get("NCM", ""))
-
-                        current_fob = float(clean_df.loc[idx, "FOB_Unit_USD"])
-                        current_unit = float(row.get("Unit_Cost_BRL", 0.0))
-
-                        st.markdown("##### Resultado do cálculo reverso para o item selecionado")
-
-                        col_left, col_right = st.columns(2)
-                        with col_left:
-                            st.metric("FOB atual (USD/unidade)", f"{current_fob:,.4f}")
-                            st.metric("FOB alvo sugerido (USD/unidade)", f"{res['fob_rounded']:,.4f}")
-                        with col_right:
-                            st.metric("Custo unit. atual (R$)", f"{current_unit:,.2f}")
-                            st.metric("Custo unit. com FOB alvo (R$)", f"{res['achieved_unit_brl']:,.2f}")
-
-                        st.caption(
-                            "Se quiser aplicar esse FOB alvo à sua simulação, clique abaixo e depois recalcule o custo de importação."
-                        )
-
-                        if st.button(
-                            "Aplicar FOB alvo ao item na simulação",
-                            key="btn_apply_reverse_fob",
-                        ):
-                            items_df = st.session_state.get("items_df", pd.DataFrame()).copy()
-                            if idx in items_df.index:
-                                items_df.loc[idx, "FOB_Unit_USD"] = res["fob_rounded"]
-                                st.session_state["items_df"] = items_df
-                                st.success(
-                                    "FOB atualizado no item da simulação. "
-                                    "Clique novamente em **Calcular custo de importação** para ver os novos resultados."
-                                )
-                            else:
-                                st.warning(
-                                    "Não foi possível localizar o item na lista atual de itens. "
-                                    "Talvez ele tenha sido removido ou a lista foi recriada."
-                                )
-                    else:
-                        st.warning(
-                            "O item salvo para o cálculo reverso não existe mais na lista atual de itens."
-                        )
-            else:
-                st.info("Adicione itens e calcule o custo de importação para usar o cálculo reverso de FOB.")
-
-            # -------- PDF + detailed table --------
+            # PDF
             items_for_pdf = clean_df.copy()
             if "Unit_Cost_BRL" in per_item.columns and len(per_item) == len(clean_df):
                 items_for_pdf["Unit_Cost_BRL"] = per_item["Unit_Cost_BRL"].values
@@ -1238,7 +1153,6 @@ with st.container():
             )
 
             with st.expander("Ver detalhes fiscais por item"):
-                # Columns we'd like to show if they exist
                 cols_to_show = [
                     "Description",
                     "NCM",
@@ -1255,8 +1169,6 @@ with st.container():
                     "Unit_Cost_BRL",
                     "Truck_BRL",
                 ]
-
-                # Keep only columns that are actually present in per_item
                 available_cols = [c for c in cols_to_show if c in per_item.columns]
 
                 if not available_cols:
@@ -1290,5 +1202,146 @@ with st.container():
                     )
 
                     st.dataframe(display_df, width="stretch")
+
+        # -------- Tab 2: Reverse FOB --------
+        with tab_reverse:
+            st.markdown("#### Cálculo reverso: FOB alvo por item")
+
+            if per_item is not None and not per_item.empty:
+                item_indices = list(per_item.index)
+
+                def format_reverse_item(idx):
+                    row = per_item.loc[idx]
+                    desc = str(row.get("Description", ""))
+                    ncm = str(row.get("NCM", ""))
+                    try:
+                        current_fob = float(clean_df.loc[idx, "FOB_Unit_USD"])
+                    except Exception:
+                        current_fob = 0.0
+                    try:
+                        unit_cost_now = float(row.get("Unit_Cost_BRL", 0.0))
+                    except Exception:
+                        unit_cost_now = 0.0
+
+                    short_desc = (desc[:40] + "…") if len(desc) > 40 else desc
+                    return (
+                        f"{idx + 1} – {short_desc} "
+                        f"(NCM {ncm}) • FOB {current_fob:.2f} USD • Custo unit. R$ {unit_cost_now:.2f}"
+                    )
+
+                selected_item_idx = st.selectbox(
+                    "Escolha o item para encontrar o FOB necessário para atingir um custo unitário alvo:",
+                    options=item_indices,
+                    format_func=format_reverse_item,
+                    key="reverse_item_select",
+                )
+
+                current_unit_cost = float(per_item.loc[selected_item_idx, "Unit_Cost_BRL"])
+                target_unit_brl = st.number_input(
+                    "Custo unitário alvo (R$):",
+                    min_value=0.0,
+                    value=round(current_unit_cost, 2),
+                    step=0.10,
+                    key="reverse_target_unit_cost",
+                )
+
+                rounding_step = st.selectbox(
+                    "Arredondamento do FOB sugerido:",
+                    options=[0.01, 0.05, 0.10, 0.50, 1.00],
+                    index=2,
+                    format_func=lambda x: f"{x:.2f} USD",
+                    key="reverse_round_step",
+                )
+
+                if st.button("Calcular FOB alvo para este item", key="btn_calc_reverse_fob"):
+                    base_df = clean_df.copy()
+                    try:
+                        fob_exact, cost_exact = solve_reverse_fob_for_item(
+                            base_df=base_df,
+                            cfg=cfg,
+                            item_idx=selected_item_idx,
+                            target_unit_brl=target_unit_brl,
+                        )
+
+                        if fob_exact is None:
+                            st.warning(
+                                "Não foi possível encontrar um FOB que alcance esse custo unitário alvo "
+                                "(mesmo com FOB muito alto ou muito baixo)."
+                            )
+                        else:
+                            if rounding_step > 0:
+                                fob_rounded = round(fob_exact / rounding_step) * rounding_step
+                            else:
+                                fob_rounded = fob_exact
+
+                            df_rounded = base_df.copy()
+                            df_rounded.loc[selected_item_idx, "FOB_Unit_USD"] = fob_rounded
+                            per_rounded, _ = compute_landed_cost(df_rounded, cfg)
+                            cost_rounded = float(per_rounded.loc[selected_item_idx, "Unit_Cost_BRL"])
+
+                            st.session_state["reverse_result"] = {
+                                "item_idx": int(selected_item_idx),
+                                "fob_exact": float(fob_exact),
+                                "fob_rounded": float(fob_rounded),
+                                "target_unit_brl": float(target_unit_brl),
+                                "achieved_unit_brl": float(cost_rounded),
+                            }
+
+                    except Exception as e:
+                        st.error(f"Erro no cálculo reverso de FOB: {e}")
+
+                if "reverse_result" in st.session_state:
+                    res = st.session_state["reverse_result"]
+                    idx = res["item_idx"]
+
+                    if idx in per_item.index and idx in clean_df.index:
+                        row = per_item.loc[idx]
+                        desc = str(row.get("Description", ""))
+                        ncm = str(row.get("NCM", ""))
+
+                        current_fob = float(clean_df.loc[idx, "FOB_Unit_USD"])
+                        current_unit = float(row.get("Unit_Cost_BRL", 0.0))
+
+                        st.markdown("##### Resultado do cálculo reverso para o item selecionado")
+
+                        col_left, col_right = st.columns(2)
+                        with col_left:
+                            st.metric("FOB atual (USD/unidade)", f"{current_fob:,.4f}")
+                            st.metric("FOB alvo sugerido (USD/unidade)", f"{res['fob_rounded']:,.4f}")
+                        with col_right:
+                            st.metric("Custo unit. atual (R$)", f"{current_unit:,.2f}")
+                            st.metric("Custo unit. com FOB alvo (R$)", f"{res['achieved_unit_brl']:,.2f}")
+
+                        st.caption(
+                            "Se quiser aplicar esse FOB alvo à sua simulação, clique abaixo e depois recalcule o custo de importação na aba 'Resumo e custos'."
+                        )
+
+                        if st.button(
+                            "Aplicar FOB alvo ao item na simulação",
+                            key="btn_apply_reverse_fob",
+                        ):
+                            items_df = st.session_state.get("items_df", pd.DataFrame()).copy()
+                            if idx in items_df.index:
+                                items_df.loc[idx, "FOB_Unit_USD"] = res["fob_rounded"]
+                                st.session_state["items_df"] = items_df
+                                st.success(
+                                    "FOB atualizado no item da simulação. "
+                                    "Volte à aba **Resumo e custos** e clique em "
+                                    "**Calcular custo de importação** para ver os novos resultados."
+                                )
+                            else:
+                                st.warning(
+                                    "Não foi possível localizar o item na lista atual de itens. "
+                                    "Talvez ele tenha sido removido ou a lista foi recriada."
+                                )
+                    else:
+                        st.warning(
+                            "O item salvo para o cálculo reverso não existe mais na lista atual de itens."
+                        )
+            else:
+                st.info("Adicione itens, calcule o custo de importação e depois use esta aba para o cálculo reverso de FOB.")
+
+    else:
+        st.info("Clique em **Calcular custo de importação** para gerar os resultados.")
 
     st.markdown("</div>", unsafe_allow_html=True)
